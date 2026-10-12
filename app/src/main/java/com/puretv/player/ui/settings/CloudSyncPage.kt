@@ -53,7 +53,7 @@ fun CloudSyncPage(
 
     Column(
         modifier = modifier.fillMaxWidth(),
-        verticalArrangement = Arrangement.spacedBy(28.dp),
+        verticalArrangement = Arrangement.spacedBy(18.dp),
     ) {
         TvButton(text = "返回源管理", onClick = onBack, variant = TvButtonVariant.SECONDARY)
 

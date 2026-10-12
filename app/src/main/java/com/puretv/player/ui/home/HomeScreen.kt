@@ -65,6 +65,7 @@ import androidx.navigation.NavHostController
 import com.puretv.player.core.navigation.Routes
 import com.puretv.player.core.theme.LocalPureTvColors
 import com.puretv.player.core.theme.LocalTvUiConfig
+import com.puretv.player.core.ui.LocalPaneBottomPadding
 import com.puretv.player.core.ui.TvCard
 import com.puretv.player.core.ui.isPortrait
 import com.puretv.player.core.util.DeviceUtils
@@ -92,7 +93,7 @@ fun HomeScreen(
     val recent by viewModel.recentHistory.collectAsStateWithLifecycle()
     val vodSources by viewModel.vodSources.collectAsStateWithLifecycle()
     val selectedSourceId by viewModel.selectedSourceId.collectAsStateWithLifecycle()
-    val sourceItems by viewModel.sourceItems.collectAsStateWithLifecycle()
+    val sourceItems by viewModel.visibleSourceItems.collectAsStateWithLifecycle()
     val selectedSourceTotal by viewModel.selectedSourceTotal.collectAsStateWithLifecycle()
 
     val modules = listOf(
@@ -132,7 +133,8 @@ fun HomeScreen(
             .verticalScroll(rememberScrollState())
             .windowInsetsPadding(WindowInsets.statusBars.only(WindowInsetsSides.Top))
             .windowInsetsPadding(WindowInsets.navigationBars.only(WindowInsetsSides.Bottom))
-            .padding(horizontal = hPad, vertical = vPad),
+            .padding(horizontal = hPad, vertical = vPad)
+            .padding(bottom = LocalPaneBottomPadding.current),
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Column(modifier = Modifier.weight(1f)) {

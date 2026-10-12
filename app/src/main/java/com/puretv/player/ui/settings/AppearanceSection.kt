@@ -48,7 +48,7 @@ fun AppearanceSection(
     val current = settings ?: return
     Column(
         modifier = modifier.fillMaxWidth(),
-        verticalArrangement = Arrangement.spacedBy(28.dp),
+        verticalArrangement = Arrangement.spacedBy(18.dp),
     ) {
         SettingGroup(title = "主题", subtitle = "出厂默认跟随系统，系统切换深浅色时无闪屏实时换肤") {
             OptionSelectorRow(

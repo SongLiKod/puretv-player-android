@@ -40,7 +40,7 @@ fun AboutSection(
     val colors = PureTvTheme.colors
     Column(
         modifier = modifier.fillMaxWidth(),
-        verticalArrangement = Arrangement.spacedBy(28.dp),
+        verticalArrangement = Arrangement.spacedBy(18.dp),
     ) {
         SettingGroup(title = "版本信息") {
             SettingRow(

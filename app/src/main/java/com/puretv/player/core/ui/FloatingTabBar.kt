@@ -64,6 +64,14 @@ private val PhoneTabs = listOf(
 val LocalTabBarPadding = compositionLocalOf { 0.dp }
 
 /**
+ * 顶层页面滚动容器为浮动导航条预留的底部内容空间（苹果式悬浮：内容全高延伸、
+ * 从半透明导航条下方穿过，滚动到末端由该值保证末行不被条体永久遮住）。
+ * 由 [com.puretv.player.core.navigation.AppNavHost] 的 pane 按路由提供：
+ * 手机形态顶层页面 = 导航条占用高度；TV 形态与二级页面 = 0，不影响既有布局。
+ */
+val LocalPaneBottomPadding = compositionLocalOf { 0.dp }
+
+/**
  * iOS 风格浮动胶囊底部导航条（手机优先设计，用户指定：导航栏在下面、像苹果浮动导航条）。
  * - 悬浮于内容之上（内容滚动时从导航条下方穿过），带外阴影与细描边营造浮起感；
  * - 选中项图标带胶囊底板高亮 + 主题色着色，未选中灰阶显示；
@@ -86,7 +94,8 @@ fun FloatingTabBar(
                 spotColor = Color.Black.copy(alpha = 0.55f),
             )
             .clip(RoundedCornerShape(30.dp))
-            .background(colors.dialog.copy(alpha = 0.96f))
+            // 半透明悬浮（苹果风格）：内容从条体下方穿过时保持可辨识
+            .background(colors.dialog.copy(alpha = 0.72f))
             .border(1.dp, colors.divider.copy(alpha = 0.8f), RoundedCornerShape(30.dp))
             .padding(horizontal = 6.dp, vertical = 6.dp),
         verticalAlignment = Alignment.CenterVertically,

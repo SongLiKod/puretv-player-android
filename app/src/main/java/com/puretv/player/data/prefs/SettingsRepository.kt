@@ -8,6 +8,7 @@ import androidx.datastore.preferences.core.floatPreferencesKey
 import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.longPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
+import androidx.datastore.preferences.core.stringSetPreferencesKey
 import com.puretv.player.core.theme.FocusStyle
 import com.puretv.player.core.theme.LayoutDensity
 import com.puretv.player.core.theme.ThemeMode
@@ -159,6 +160,37 @@ class SettingsRepository @Inject constructor(
         it[KEY_MINI_PROGRESS] = show
     }
 
+    /* ============================== 失效资源标记（源端不可播放自动隐藏） ============================== */
+
+    /** 播放失败（源端确定性错误：404/403/格式不支持等）的资源地址集合；网络类错误不标记 */
+    val brokenPlayUrls: Flow<Set<String>> = dataStore.data.map { prefs ->
+        prefs[KEY_BROKEN_URLS]?.toSet().orEmpty()
+    }
+
+    /** 标记失效（去重，最多保留 300 条） */
+    suspend fun markPlayUrlBroken(url: String) {
+        edit { prefs ->
+            val current = prefs[KEY_BROKEN_URLS].orEmpty()
+            if (url.isNotBlank() && url !in current) {
+                prefs[KEY_BROKEN_URLS] =
+                    if (current.size >= 300) (current + url).take(300).toSet() else current + url
+            }
+        }
+    }
+
+    /** 播放成功后解除标记（网络恢复/源修复自动恢复显示） */
+    suspend fun clearPlayUrlBroken(url: String) {
+        edit { prefs ->
+            val current = prefs[KEY_BROKEN_URLS]
+            if (current != null && url in current) {
+                prefs[KEY_BROKEN_URLS] = current - url
+            }
+        }
+    }
+
+    /** 清空全部失效标记（设置 → 存储与缓存） */
+    suspend fun clearAllBrokenPlayUrls() = edit { it.remove(KEY_BROKEN_URLS) }
+
     suspend fun setTmdbApiKey(key: String, region: String) = edit {
         it[KEY_TMDB_KEY] = key
         it[KEY_TMDB_REGION] = region
@@ -288,6 +320,7 @@ class SettingsRepository @Inject constructor(
         private val KEY_NEXT_EP_COUNTDOWN = intPreferencesKey("next_ep_countdown_sec")
         private val KEY_CACHE_MAX_MB = intPreferencesKey("cache_max_mb")
         private val KEY_MINI_PROGRESS = booleanPreferencesKey("mini_progress_enabled")
+        private val KEY_BROKEN_URLS = stringSetPreferencesKey("broken_play_urls")
         private val KEY_TMDB_KEY = stringPreferencesKey("tmdb_api_key")
         private val KEY_TMDB_REGION = stringPreferencesKey("tmdb_region")
         private val KEY_RD_KEY = stringPreferencesKey("real_debrid_key")

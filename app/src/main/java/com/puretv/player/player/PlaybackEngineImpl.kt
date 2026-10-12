@@ -147,6 +147,9 @@ class PlaybackEngineImpl @Inject constructor(
 
     private var latestSettings: AppSettings = AppSettings()
 
+    /** 已解除失效标记的地址（每条播放任务只清一次） */
+    private var brokenClearedForUrl: String? = null
+
     // ---- 当前播放任务的卡顿/备用源状态 ----
     private var backupIndex = 0
     private val attemptedSources = mutableSetOf(0)
@@ -309,6 +312,7 @@ class PlaybackEngineImpl @Inject constructor(
         attemptedSources.add(0)
         stallCount = 0
         bufferingSinceMs = 0L
+        brokenClearedForUrl = null
         stallCountedInEpisode = false
         healthySinceMs = 0L
         stableSinceMs = 0L
@@ -496,6 +500,7 @@ class PlaybackEngineImpl @Inject constructor(
                         stallCount = stallCount,
                     )
                     persistHistory(_currentRequest.value)
+                    markBrokenIfDefinitive(error)
                 }
             }
 
@@ -574,6 +579,12 @@ class PlaybackEngineImpl @Inject constructor(
         val duration = p.duration.takeIf { it != C.TIME_UNSET && it > 0 } ?: 0L
         val bufferedAhead = (p.bufferedPosition - position).coerceAtLeast(0L)
         val speedBps = currentSpeedBytes(now)
+
+        // 播放成功自愈：起播 5 秒后解除该地址失效标记（网络恢复/源修复自动恢复显示）
+        if (brokenClearedForUrl != request.url && p.isPlaying && position > 5_000L) {
+            brokenClearedForUrl = request.url
+            scope.launch { settingsRepository.clearPlayUrlBroken(request.url) }
+        }
 
         // 弱网判定：网速低于约 1.5MB/s 或持续缓冲中（需求 5.5.3 / 5.4.4）
         val lowSpeed = speedBps in 1 until WEAK_SPEED_BYTES_PER_SEC
@@ -904,6 +915,26 @@ class PlaybackEngineImpl @Inject constructor(
         height >= 700 -> "720P"
         height > 0 -> "SD"
         else -> null
+    }
+
+    /** 确定性源错误（404/403/内容不支持/解析失败）才标记失效；网络类错误不标记（用户断网会误伤全部影片） */
+    private fun markBrokenIfDefinitive(error: PlaybackException) {
+        val definitive = when (error.errorCode) {
+            PlaybackException.ERROR_CODE_IO_FILE_NOT_FOUND,
+            PlaybackException.ERROR_CODE_IO_BAD_HTTP_STATUS,
+            PlaybackException.ERROR_CODE_IO_INVALID_HTTP_CONTENT_TYPE,
+            PlaybackException.ERROR_CODE_PARSING_MANIFEST_MALFORMED,
+            PlaybackException.ERROR_CODE_PARSING_MANIFEST_UNSUPPORTED,
+            PlaybackException.ERROR_CODE_PARSING_CONTAINER_MALFORMED,
+            PlaybackException.ERROR_CODE_PARSING_CONTAINER_UNSUPPORTED,
+            -> true
+
+            else -> false
+        }
+        val url = _currentRequest.value?.url
+        if (definitive && !url.isNullOrBlank()) {
+            scope.launch { settingsRepository.markPlayUrlBroken(url) }
+        }
     }
 
     private fun friendlyError(error: PlaybackException): String = when (error.errorCode) {

@@ -52,6 +52,7 @@ fun SourcesSection(
     viewModel: SettingsViewModel,
     onOpenBackup: () -> Unit,
     onOpenSync: () -> Unit,
+    onOpenAddSource: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val colors = PureTvTheme.colors
@@ -80,9 +81,15 @@ fun SourcesSection(
 
     Column(
         modifier = modifier.fillMaxWidth(),
-        verticalArrangement = Arrangement.spacedBy(28.dp),
+        verticalArrangement = Arrangement.spacedBy(18.dp),
     ) {
-        SettingGroup(title = "添加源", subtitle = "支持 M3U、Xtream Codes 主流协议（5.3.1）") {
+        SettingGroup(title = "添加源", subtitle = "支持在线搜索、M3U、Xtream、TVBox 配置") {
+            SettingRow(
+                title = "在线搜索线路",
+                subtitle = "关键词搜索全网 MacCMS 采集站，自动探测可用性后多选批量添加",
+                value = "搜索",
+                onClick = onOpenAddSource,
+            )
             SettingRow(
                 title = "M3U 网址",
                 subtitle = "输入 M3U 播放列表网络地址，解析过程带进度提示",

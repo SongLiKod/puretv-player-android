@@ -4,6 +4,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.puretv.player.data.local.entity.VodItemEntity
 import com.puretv.player.data.model.ImportProgress
+import com.puretv.player.data.prefs.SettingsRepository
 import com.puretv.player.data.source.SelectedSourceStore
 import com.puretv.player.data.vod.VodRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -32,6 +33,7 @@ import javax.inject.Inject
 class VodViewModel @Inject constructor(
     private val vodRepository: VodRepository,
     private val selectedSourceStore: SelectedSourceStore,
+    private val settingsRepository: SettingsRepository,
 ) : ViewModel() {
 
     /** 当前品类 Tab（null = 全部） */
@@ -62,10 +64,13 @@ class VodViewModel @Inject constructor(
         .flatMapLatest { kind -> vodRepository.observeCategories(kind) }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
 
-    /** 海报墙数据（缓存 Flow，实时响应刷新/刮削回填） */
+    /** 海报墙数据（缓存 Flow，实时响应刷新/刮削回填；确定性播放失败过的影片自动隐藏） */
     val items: StateFlow<List<VodItemEntity>> =
         combine(selectedKind, selectedCategory) { kind, category -> kind to category }
             .flatMapLatest { (kind, category) -> vodRepository.observeItems(kind, category) }
+            .combine(settingsRepository.brokenPlayUrls) { list, broken ->
+                list.filter { item -> item.playUrl == null || item.playUrl !in broken }
+            }
             .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
 
     /** 搜索结果（本地缓存；在线命中的条目已入库，Room Flow 自动带出；按「本站/全网」范围过滤） */
@@ -79,6 +84,9 @@ class VodViewModel @Inject constructor(
                 } else {
                     vodRepository.search(query, sourceId = if (all) null else sourceId)
                 }
+            }
+            .combine(settingsRepository.brokenPlayUrls) { list, broken ->
+                list.filter { item -> item.playUrl == null || item.playUrl !in broken }
             }
             .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
 

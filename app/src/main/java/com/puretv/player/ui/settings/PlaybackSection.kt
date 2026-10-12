@@ -30,9 +30,10 @@ fun PlaybackSection(
 ) {
     val current = settings ?: return
     val cacheSize by viewModel.cacheSizeLabel.collectAsStateWithLifecycle()
+    val brokenMarkCount by viewModel.brokenMarkCount.collectAsStateWithLifecycle()
     Column(
         modifier = modifier.fillMaxWidth(),
-        verticalArrangement = Arrangement.spacedBy(28.dp),
+        verticalArrangement = Arrangement.spacedBy(18.dp),
     ) {
         SettingGroup(title = "智能缓冲", subtitle = "弱网预加载、强网提速，卡顿自动纠错（5.5.3）") {
             OptionSelectorRow(
@@ -110,6 +111,13 @@ fun PlaybackSection(
                 value = cacheSize,
                 valueColor = PureTvTheme.colors.textSecondary,
                 onClick = { viewModel.clearMediaCache() },
+            )
+            SettingRow(
+                title = "失效资源标记",
+                subtitle = "源端确定不可播放的影片会自动从列表隐藏（重新播放成功自动恢复显示），点按清除全部标记",
+                value = "$brokenMarkCount 部",
+                valueColor = PureTvTheme.colors.textSecondary,
+                onClick = { viewModel.clearBrokenMarks() },
             )
         }
 

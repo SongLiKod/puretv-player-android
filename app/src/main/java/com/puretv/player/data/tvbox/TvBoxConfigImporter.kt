@@ -210,4 +210,68 @@ class TvBoxConfigImporter @Inject constructor(
         val obj = runCatching { JSONObject(ext) }.getOrNull() ?: return emptyList()
         return listOf(obj.optString("api"), obj.optString("url")).filter { it.isNotBlank() }
     }
+
+    /**
+     * 在线搜索发现的地址批量添加为 MacCMS 点播线路（设置 → 在线搜索添加线路）。
+     * 地址若已是采集端点（含 provide/vod）直接探测；否则自动补 `api.php/provide/vod`
+     * 端点再探测——只有返回采集 JSON（含 list / vod 字段）的地址才写库，
+     * 避免把普通网页地址污染进线路列表；重复地址自动跳过。
+     * @return 新写入的线路条数
+     */
+    suspend fun addCmsSources(
+        entries: List<String>,
+        onProgress: (done: Int, total: Int) -> Unit = { _, _ -> },
+    ): Int = withContext(io) {
+        var added = 0
+        entries.forEachIndexed { index, raw ->
+            currentCoroutineContext().ensureActive()
+            val base = raw.trim().trimEnd('/')
+            val candidates = if (looksLikeCms(base)) {
+                listOf(base)
+            } else {
+                listOf("$base/api.php/provide/vod", "$base/api.php/provide/vod/at/json")
+            }
+            val usable = candidates.firstOrNull { probeCms(it) }
+            if (usable != null) {
+                val sourceId = StringUtils.stableId(usable)
+                if (sourceDao.get(sourceId) == null) {
+                    sourceDao.upsert(
+                        SourceEntity(
+                            id = sourceId,
+                            name = hostOf(usable),
+                            type = SourceType.CMS,
+                            url = usable,
+                            enabled = true,
+                            createdAt = System.currentTimeMillis(),
+                        )
+                    )
+                    added++
+                }
+            }
+            onProgress(index + 1, entries.size)
+        }
+        added
+    }
+
+    /** 探测 MacCMS 采集端点：HTTP 200 且响应是采集 JSON（含 list / vod 字段） */
+    private fun probeCms(url: String): Boolean = try {
+        val request = Request.Builder()
+            .url(url)
+            .header("User-Agent", "Mozilla/5.0 (Linux; Android 13) Mobile Safari/537.36")
+            .build()
+        client.newCall(request).execute().use { response ->
+            if (!response.isSuccessful) return false
+            val body = response.body?.string()?.take(4096).orEmpty()
+            body.contains("\"list\"") || body.contains("\"vod\"")
+        }
+    } catch (t: Throwable) {
+        false
+    }
+
+    /** 取地址主机名做线路名（如 example.com），解析失败退回原地址 */
+    private fun hostOf(url: String): String = try {
+        java.net.URI(url).host?.removePrefix("www.")?.ifBlank { null } ?: url
+    } catch (t: Throwable) {
+        url
+    }
 }

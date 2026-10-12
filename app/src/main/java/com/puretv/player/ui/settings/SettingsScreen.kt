@@ -42,6 +42,7 @@ import com.puretv.player.core.navigation.SettingsSections
 import com.puretv.player.core.theme.PureTvTheme
 import com.puretv.player.core.theme.scaled
 import com.puretv.player.core.ui.LoadingOverlay
+import com.puretv.player.core.ui.LocalPaneBottomPadding
 import com.puretv.player.core.ui.TvButton
 import com.puretv.player.core.ui.TvButtonVariant
 import com.puretv.player.core.ui.TvCard
@@ -114,7 +115,8 @@ fun SettingsScreen(
                 Column(
                     modifier = contentMod
                         .verticalScroll(rememberScrollState())
-                        .padding(horizontal = if (portrait) 16.dp else 36.dp, vertical = if (portrait) 16.dp else 24.dp),
+                        .padding(horizontal = if (portrait) 16.dp else 36.dp, vertical = if (portrait) 16.dp else 24.dp)
+                        .padding(bottom = LocalPaneBottomPadding.current),
                 ) {
                     notice?.let { NoticeBanner(it) }
                     when (selected) {
@@ -152,6 +154,7 @@ fun SettingsScreen(
                                 viewModel = viewModel,
                                 onOpenBackup = { subPage = SettingsSubPage.BACKUP },
                                 onOpenSync = { subPage = SettingsSubPage.SYNC },
+                                onOpenAddSource = { nav.navigate(Routes.ADD_SOURCE) },
                             )
                         }
 

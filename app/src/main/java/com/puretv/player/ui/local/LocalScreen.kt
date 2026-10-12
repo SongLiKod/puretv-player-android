@@ -56,6 +56,7 @@ import androidx.navigation.NavHostController
 import com.puretv.player.core.navigation.Routes
 import com.puretv.player.core.theme.LocalPureTvColors
 import com.puretv.player.core.ui.EmptyState
+import com.puretv.player.core.ui.LocalPaneBottomPadding
 import com.puretv.player.core.ui.TvButton
 import com.puretv.player.core.ui.TvCard
 import com.puretv.player.core.ui.TvScaffold
@@ -283,7 +284,7 @@ private fun VideoGrid(
         contentPadding = PaddingValues(
             start = if (portrait) 16.dp else 40.dp,
             end = if (portrait) 16.dp else 40.dp,
-            bottom = if (portrait) 24.dp else 40.dp,
+            bottom = (if (portrait) 24.dp else 40.dp) + LocalPaneBottomPadding.current,
         ),
         horizontalArrangement = Arrangement.spacedBy(spacing),
         verticalArrangement = Arrangement.spacedBy(spacing),
@@ -361,7 +362,7 @@ private fun VideoList(
         contentPadding = PaddingValues(
             start = if (portrait) 16.dp else 40.dp,
             end = if (portrait) 16.dp else 40.dp,
-            bottom = if (portrait) 24.dp else 40.dp,
+            bottom = (if (portrait) 24.dp else 40.dp) + LocalPaneBottomPadding.current,
         ),
         verticalArrangement = Arrangement.spacedBy(12.dp),
         modifier = modifier

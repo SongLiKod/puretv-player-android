@@ -1,9 +1,8 @@
 package com.puretv.player.core.navigation
 
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.padding
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.navigation.NavHostController
@@ -11,6 +10,7 @@ import androidx.navigation.NavType
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.navArgument
+import com.puretv.player.core.ui.LocalPaneBottomPadding
 import com.puretv.player.core.ui.LocalTabBarPadding
 import com.puretv.player.core.ui.PhoneTopLevelRoutes
 import com.puretv.player.ui.favorites.FavoritesScreen
@@ -20,6 +20,7 @@ import com.puretv.player.ui.live.LiveScreen
 import com.puretv.player.ui.local.LocalScreen
 import com.puretv.player.ui.player.PlaybackScreen
 import com.puretv.player.ui.plugins.PluginsScreen
+import com.puretv.player.ui.settings.AddSourceScreen
 import com.puretv.player.ui.settings.SettingsScreen
 import com.puretv.player.ui.settings.SourceCheckScreen
 import com.puretv.player.ui.settings.TutorialScreen
@@ -76,28 +77,22 @@ fun AppNavHost(
         composable(Routes.PLUGINS) { pane(Routes.PLUGINS) { PluginsScreen(navController) } }
         composable(Routes.TUTORIAL) { pane(Routes.TUTORIAL) { TutorialScreen(navController) } }
         composable(Routes.SOURCE_CHECK) { pane(Routes.SOURCE_CHECK) { SourceCheckScreen(navController) } }
+        composable(Routes.ADD_SOURCE) { pane(Routes.ADD_SOURCE) { AddSourceScreen(navController) } }
         composable(Routes.PLAYBACK) { pane(Routes.PLAYBACK) { PlaybackScreen(navController) } }
     }
 }
 
 /**
- * 页面容器：手机形态顶层页面为底部浮动导航栏留出高度（[LocalTabBarPadding]），
- * 使内容不被导航条遮挡；按各页面自身路由判定，转场期间不会闪跳。
+ * 页面容器：内容全高延伸（苹果式——底部浮动导航条半透明悬浮于内容之上，内容从条下穿过）。
+ * 底部留白不再由容器裁剪，改为经 [LocalPaneBottomPadding] 提供给各页面的滚动容器做
+ * contentPadding，保证滚动到末端末行不被条体永久遮住。按各页面自身路由判定，转场期间不闪跳。
  * TV 形态与手机二级页面该值为 0，直接透传，不影响既有布局。
  */
 @Composable
 private fun pane(route: String, content: @Composable () -> Unit) {
     val bottomPadding =
         if (route in PhoneTopLevelRoutes) LocalTabBarPadding.current else 0.dp
-    if (bottomPadding <= 0.dp) {
+    CompositionLocalProvider(LocalPaneBottomPadding provides bottomPadding) {
         content()
-    } else {
-        Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(bottom = bottomPadding),
-        ) {
-            content()
-        }
     }
 }

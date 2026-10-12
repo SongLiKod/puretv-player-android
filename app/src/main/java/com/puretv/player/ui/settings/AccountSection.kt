@@ -41,7 +41,7 @@ fun AccountSection(
 
     Column(
         modifier = modifier.fillMaxWidth(),
-        verticalArrangement = Arrangement.spacedBy(28.dp),
+        verticalArrangement = Arrangement.spacedBy(18.dp),
     ) {
         SettingGroup(title = "TMDB 影视信息", subtitle = "自动刮削海报、简介、评分与演员表（5.4.2）") {
             InfoLine(

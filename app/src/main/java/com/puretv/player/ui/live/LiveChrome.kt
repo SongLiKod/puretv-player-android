@@ -5,6 +5,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -34,6 +35,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.puretv.player.core.theme.LocalPureTvColors
 import com.puretv.player.core.ui.ConfirmDialog
+import com.puretv.player.core.ui.LocalPaneBottomPadding
 import com.puretv.player.core.ui.TvButton
 import com.puretv.player.core.ui.TvButtonVariant
 import com.puretv.player.core.ui.TvCard
@@ -153,7 +155,10 @@ fun ChannelList(
             delay(60_000L)
         }
     }
-    LazyColumn(modifier = modifier.fillMaxSize()) {
+    LazyColumn(
+        contentPadding = PaddingValues(bottom = LocalPaneBottomPadding.current),
+        modifier = modifier.fillMaxSize(),
+    ) {
         items(channels, key = { "${it.sourceId}|${it.id}" }) { channel ->
             ChannelRow(
                 channel = channel,

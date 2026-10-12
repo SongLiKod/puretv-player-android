@@ -15,6 +15,7 @@ object Routes {
     const val TUTORIAL = "tutorial"                 // 使用教程 + 常见问题
     const val PLAYBACK = "playback"                 // 播放页
     const val SOURCE_CHECK = "sourceCheck"          // 源检测工具
+    const val ADD_SOURCE = "addSource"              // 在线搜索添加线路
     const val VOD_DETAIL = "vodDetail/{sourceId}/{itemId}" // 影视详情
 
     fun vodDetail(sourceId: String, itemId: String): String =

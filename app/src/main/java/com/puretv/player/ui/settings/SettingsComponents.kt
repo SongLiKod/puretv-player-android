@@ -13,6 +13,9 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.KeyboardArrowRight
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -25,6 +28,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.puretv.player.core.theme.PureTvTheme
 import com.puretv.player.core.theme.scaled
@@ -34,7 +39,10 @@ import com.puretv.player.core.ui.TvButtonVariant
 import com.puretv.player.core.ui.TvCard
 import com.puretv.player.core.ui.TvDialog
 
-/** 设置分组卡片：分组标题 + 一组设置行 */
+/**
+ * 设置分组卡片（iOS 分组列表风格）：紧凑灰色小节头（副说明右对齐灰字）+ 圆角卡片内的等高设置行。
+ * 行与行之间以统一内边距形成节奏，避免标题/副标题块占掉过多纵向空间。
+ */
 @Composable
 fun SettingGroup(
     title: String,
@@ -44,35 +52,47 @@ fun SettingGroup(
 ) {
     val colors = PureTvTheme.colors
     Column(modifier = modifier.fillMaxWidth()) {
-        Text(
-            text = title,
-            style = MaterialTheme.typography.titleMedium.scaled(),
-            color = colors.textPrimary,
-            fontWeight = FontWeight.Medium,
-        )
-        if (subtitle != null) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(start = 4.dp, end = 4.dp, bottom = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
             Text(
-                text = subtitle,
-                style = MaterialTheme.typography.labelMedium.scaled(),
-                color = colors.textTertiary,
-                modifier = Modifier.padding(top = 4.dp),
+                text = title,
+                style = MaterialTheme.typography.bodyMedium.scaled(),
+                color = colors.textSecondary,
+                fontWeight = FontWeight.Medium,
+                maxLines = 1,
             )
+            if (subtitle != null) {
+                Text(
+                    text = subtitle,
+                    style = MaterialTheme.typography.labelMedium.scaled(),
+                    color = colors.textTertiary,
+                    maxLines = 1,
+                    textAlign = TextAlign.End,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier
+                        .weight(1f)
+                        .padding(start = 10.dp),
+                )
+            }
         }
         Column(
             modifier = Modifier
-                .padding(top = 14.dp)
                 .fillMaxWidth()
                 .clip(RoundedCornerShape(14.dp))
                 .background(colors.card)
                 .border(1.dp, colors.divider, RoundedCornerShape(14.dp))
-                .padding(vertical = 6.dp, horizontal = 20.dp),
-            verticalArrangement = Arrangement.spacedBy(6.dp),
+                .padding(vertical = 4.dp, horizontal = 12.dp),
+            verticalArrangement = Arrangement.spacedBy(2.dp),
             content = content,
         )
     }
 }
 
-/** 设置行：标题 + 说明 + 右侧取值/控件；可点击行带完整焦点（TV 遥控器 OK 确认） */
+/** 设置行：标题 + 说明 + 右侧取值/控件；可点击行带完整焦点（TV 遥控器 OK 确认）与 iOS 式右箭头 */
 @Composable
 fun SettingRow(
     title: String,
@@ -83,25 +103,21 @@ fun SettingRow(
     onClick: (() -> Unit)? = null,
     trailing: @Composable (RowScope.() -> Unit)? = null,
 ) {
-    val colors = PureTvTheme.colors
-    Row(
-        modifier = modifier
-            .fillMaxWidth()
-            .let { if (onClick != null) it else it.padding(vertical = 10.dp) },
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        if (onClick != null) {
-            TvCard(
-                onClick = onClick,
-                modifier = Modifier.fillMaxWidth(),
-                shape = RoundedCornerShape(10.dp),
-                borderWidth = 2.dp,
-                contentAlignment = Alignment.CenterStart,
-            ) {
-                Row { RowContent(title, subtitle, value, valueColor, trailing) }
+    if (onClick != null) {
+        TvCard(
+            onClick = onClick,
+            modifier = modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(10.dp),
+            borderWidth = 2.dp,
+            contentAlignment = Alignment.CenterStart,
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                RowContent(title, subtitle, value, valueColor, trailing, showChevron = trailing == null)
             }
-        } else {
-            Row { RowContent(title, subtitle, value, valueColor, trailing) }
+        }
+    } else {
+        Row(modifier = modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            RowContent(title, subtitle, value, valueColor, trailing, showChevron = false)
         }
     }
 }
@@ -113,6 +129,7 @@ private fun androidx.compose.foundation.layout.RowScope.RowContent(
     value: String?,
     valueColor: Color?,
     trailing: (@Composable (RowScope.() -> Unit))?,
+    showChevron: Boolean,
 ) {
     val colors = PureTvTheme.colors
     Row(
@@ -132,6 +149,8 @@ private fun androidx.compose.foundation.layout.RowScope.RowContent(
                     text = subtitle,
                     style = MaterialTheme.typography.labelMedium.scaled(),
                     color = colors.textTertiary,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
                     modifier = Modifier.padding(top = 3.dp),
                 )
             }
@@ -140,13 +159,21 @@ private fun androidx.compose.foundation.layout.RowScope.RowContent(
             Text(
                 text = value,
                 style = MaterialTheme.typography.bodyMedium.scaled(),
-                color = valueColor ?: colors.highlight,
-                modifier = Modifier.padding(start = 16.dp),
+                color = valueColor ?: colors.textSecondary,
+                modifier = Modifier.padding(start = 12.dp),
+            )
+        }
+        if (showChevron) {
+            Icon(
+                imageVector = Icons.Default.KeyboardArrowRight,
+                contentDescription = null,
+                tint = colors.textTertiary,
+                modifier = Modifier.padding(start = 2.dp).size(18.dp),
             )
         }
         if (trailing != null) {
             Row(
-                modifier = Modifier.padding(start = 16.dp),
+                modifier = Modifier.padding(start = 12.dp),
                 verticalAlignment = Alignment.CenterVertically,
                 content = trailing,
             )

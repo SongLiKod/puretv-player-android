@@ -50,6 +50,7 @@ import com.puretv.player.core.ui.EmptyState
 import com.puretv.player.core.ui.ErrorState
 import com.puretv.player.core.ui.InlineLoading
 import com.puretv.player.core.ui.InputDialog
+import com.puretv.player.core.ui.LocalPaneBottomPadding
 import com.puretv.player.core.ui.TvButton
 import com.puretv.player.core.ui.TvButtonVariant
 import com.puretv.player.core.ui.TvDialog
@@ -453,7 +454,10 @@ private fun VodPosterGrid(
         state = state,
         columns = GridCells.Adaptive(minSize = if (portrait) 140.dp else 168.dp),
         modifier = modifier.fillMaxSize(),
-        contentPadding = PaddingValues(top = 12.dp, bottom = 32.dp),
+        contentPadding = PaddingValues(
+            top = 12.dp,
+            bottom = 32.dp + LocalPaneBottomPadding.current,
+        ),
         horizontalArrangement = Arrangement.spacedBy(spacing),
         verticalArrangement = Arrangement.spacedBy(spacing),
     ) {

@@ -27,6 +27,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import javax.inject.Inject
@@ -161,6 +162,15 @@ class SettingsViewModel @Inject constructor(
             playbackEngine.clearMediaCache()
             refreshCacheSize()
         }
+    }
+
+    /** 失效资源标记数量（存储与缓存分区展示） */
+    val brokenMarkCount: StateFlow<Int> = settingsRepository.brokenPlayUrls
+        .map { it.size }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), 0)
+
+    fun clearBrokenMarks() {
+        viewModelScope.launch { settingsRepository.clearAllBrokenPlayUrls() }
     }
 
     /* ----------------------------- 账号与服务 ----------------------------- */

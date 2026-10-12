@@ -32,7 +32,7 @@ import javax.inject.Inject
 
 @HiltViewModel
 class HomeViewModel @Inject constructor(
-    settingsRepository: SettingsRepository,
+    private val settingsRepository: SettingsRepository,
     private val historyRepository: HistoryRepository,
     favoritesRepository: FavoritesRepository,
     channelDao: ChannelDao,
@@ -76,6 +76,12 @@ class HomeViewModel @Inject constructor(
     /** 当前资源站已缓存影片（分页加载，滚动到底自动追加） */
     private val _sourceItems = MutableStateFlow<List<VodItemEntity>>(emptyList())
     val sourceItems: StateFlow<List<VodItemEntity>> = _sourceItems
+
+    /** 对外展示列表：确定性播放失败过的影片自动隐藏（播放成功自动恢复显示） */
+    val visibleSourceItems: StateFlow<List<VodItemEntity>> =
+        combine(_sourceItems, settingsRepository.brokenPlayUrls) { items, broken ->
+            items.filter { item -> item.playUrl == null || item.playUrl !in broken }
+        }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
 
     /** 当前资源站影片总数（源同步时回写的 channelCount） */
     val selectedSourceTotal: StateFlow<Int> =
