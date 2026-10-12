@@ -1,0 +1,27 @@
+{
+  "spider": "",
+  "sites": [
+    { "key": "ffzy", "name": "飞飞资源", "type": 1, "api": "https://api.ffzyapi.com/api.php/provide/vod/at/vod", "searchable": 1, "quickSearch": 1, "filterable": 1 },
+    { "key": "hhzy", "name": "华哥资源", "type": 1, "api": "https://hhzyapi.com/api.php/provide/vod/at/vod", "searchable": 1, "quickSearch": 1, "filterable": 1 },
+    { "key": "lziapi", "name": "量子资源", "type": 1, "api": "https://cj.lziapi.com/api.php/provide/vod/", "searchable": 1, "quickSearch": 1, "filterable": 1 },
+    { "key": "wujin", "name": "无尽资源", "type": 1, "api": "https://api.wujinapi.com/api.php/provide/vod/", "searchable": 1, "quickSearch": 1, "filterable": 1 },
+    { "key": "hongniu", "name": "红牛资源", "type": 1, "api": "https://www.hongniuzy2.com/api.php/provide/vod/", "searchable": 1, "quickSearch": 1, "filterable": 1 },
+    { "key": "bfzy", "name": "暴风资源", "type": 1, "api": "https://bfzyapi.com/api.php/provide/vod/", "searchable": 1, "quickSearch": 1, "filterable": 1 },
+    { "key": "dbzy", "name": "豆瓣资源", "type": 1, "api": "https://www.dbzy.tv/api.php/provide/vod/", "searchable": 1, "quickSearch": 1, "filterable": 1 },
+    { "key": "ckzy", "name": "超额资源", "type": 1, "api": "http://ckzy.me/api.php/provide/vod/at/vod", "searchable": 1, "quickSearch": 1, "filterable": 1 },
+    { "key": "dytt", "name": "电影天堂", "type": 1, "api": "https://caiji.dyttzyapi.com/api.php/provide/vod", "searchable": 1, "quickSearch": 1, "filterable": 1 },
+    { "key": "lele", "name": "乐乐资源", "type": 1, "api": "https://lovedan.net/api.php/provide/vod/", "searchable": 1, "quickSearch": 1, "filterable": 1 },
+    { "key": "zuid", "name": "最大资源", "type": 1, "api": "https://api.zuidapi.com/api.php/provide/vod/", "searchable": 1, "quickSearch": 1, "filterable": 1 },
+    { "key": "iqiyizy", "name": "爱奇艺资源", "type": 1, "api": "https://iqiyizyapi.com/api.php/provide/vod/", "searchable": 1, "quickSearch": 1, "filterable": 1 },
+    { "key": "mdzy", "name": "麻豆资源", "type": 1, "api": "https://www.mdzyapi.com/api.php/provide/vod/", "searchable": 1, "quickSearch": 1, "filterable": 1 },
+    { "key": "360zy", "name": "360资源", "type": 1, "api": "https://360zy.tv/api.php/provide/vod/", "searchable": 1, "quickSearch": 1, "filterable": 1 },
+    { "key": "wuyou", "name": "无忧资源", "type": 1, "api": "https://www.wyvod.com/api.php/provide/vod/", "searchable": 1, "quickSearch": 1, "filterable": 1 },
+    { "key": "hgyx", "name": "红牛·极速", "type": 1, "api": "https://hong.hgyx.vip/api.php/provide/vod/", "searchable": 1, "quickSearch": 1, "filterable": 1 },
+    { "key": "niuniu", "name": "牛牛资源", "type": 1, "api": "https://api.niuniuzy.me/api.php/provide/vod/", "searchable": 1, "quickSearch": 1, "filterable": 1 },
+    { "key": "suoni", "name": "索尼资源", "type": 1, "api": "https://suoniapi.com/api.php/provide/vod/", "searchable": 1, "quickSearch": 1, "filterable": 1 },
+    { "key": "shenma", "name": "神马资源", "type": 1, "api": "https://sdzyapi.com/api.php/provide/vod/", "searchable": 1, "quickSearch": 1, "filterable": 1 },
+    { "key": "yaya", "name": "丫丫资源", "type": 1, "api": "https://yayazy2.com/api.php/provide/vod/", "searchable": 1, "quickSearch": 1, "filterable": 1 }
+  ],
+  "lives": [],
+  "parses": []
+}

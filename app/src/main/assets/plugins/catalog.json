@@ -1,0 +1,62 @@
+{
+  "schemaVersion": 1,
+  "updatedAt": 1760217600000,
+  "checksum": "6b66b7d707287a93f0b46920bf876dce63cc014a9bf7c92934b3826e43e83537",
+  "note": "PureTV 官方插件目录：仅收录官方审核上架（official=true）插件。sha256 为插件描述串（id|type|version|name|description）的 SHA-256 摘要，安装时逐条校验；checksum 为全部条目摘要的二次汇总校验。",
+  "plugins": [
+    {
+      "id": "subtitle_assist",
+      "name": "字幕增强助手",
+      "description": "自动匹配并加载外挂字幕（srt/ass/vtt），支持双语切换与字号调节",
+      "type": "subtitle",
+      "version": "1.2.0",
+      "official": true,
+      "sha256": "751abef879f6905d7b015620205961f94b2280a8aa381d0d40533626c863f215"
+    },
+    {
+      "id": "subtitle_dual",
+      "name": "双语字幕显示",
+      "description": "在线资源自动展示中英双语字幕，弱网优先使用本地缓存字幕",
+      "type": "subtitle",
+      "version": "1.0.3",
+      "official": true,
+      "sha256": "1d3c46b830720fdddc4d8bb05789f12188405cd7a9682f0286ad0d3c5e5a9c24"
+    },
+    {
+      "id": "source_aggregate",
+      "name": "聚合资源检索",
+      "description": "聚合多个公开片库的检索入口，一键跳转可用播放地址",
+      "type": "source",
+      "version": "2.0.1",
+      "official": true,
+      "sha256": "b0ff68854b7d0d4d3e3052db30b771be9bac97cd017d5593a45cf847e4072424"
+    },
+    {
+      "id": "source_shelf",
+      "name": "公开片库订阅",
+      "description": "订阅公开影视数据库的榜单与合集，自动更新点播列表",
+      "type": "source",
+      "version": "1.4.2",
+      "official": true,
+      "sha256": "1bb46489a47bb9d1163fcd33e5fd30848fd3c8feac80d64cc3123ea9b5322346"
+    },
+    {
+      "id": "skin_deep_blue",
+      "name": "深空蓝皮肤",
+      "description": "深色观影主题优化，降低底色亮度、突出海报墙层次",
+      "type": "skin",
+      "version": "1.1.0",
+      "official": true,
+      "sha256": "178311730bfca7bffe0645a742aa34a4cc249f6c612e515222a4eda26f4d275e"
+    },
+    {
+      "id": "skin_compact",
+      "name": "紧凑海报墙皮肤",
+      "description": "紧凑布局与更小卡片间距，一屏展示更多影片海报",
+      "type": "skin",
+      "version": "1.0.5",
+      "official": true,
+      "sha256": "a706de206e2acba4fe6a6ade175ef0057d2ba4f282e91a8db6d4ef852b23878d"
+    }
+  ]
+}

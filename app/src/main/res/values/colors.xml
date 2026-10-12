@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- 浅色主题下的窗口底色（跟随系统：日间） -->
+    <color name="window_background">#F9FAFB</color>
+    <!-- 全局固定色值（三套主题共用，不随主题切换） -->
+    <color name="fixed_success">#22C55E</color>
+    <color name="fixed_warning">#F97316</color>
+    <color name="fixed_error">#EF4444</color>
+    <color name="fixed_link">#3B82F6</color>
+    <color name="fixed_scrim">#80000000</color>
+</resources>

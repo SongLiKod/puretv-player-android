@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- 深色主题下的窗口底色（跟随系统：夜间 / 观影主打） -->
+    <color name="window_background">#0F1118</color>
+</resources>
