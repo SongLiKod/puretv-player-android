@@ -1,5 +1,6 @@
 package com.puretv.player
 
+import android.content.Intent
 import android.content.pm.ActivityInfo
 import android.os.Bundle
 import androidx.activity.ComponentActivity
@@ -7,8 +8,10 @@ import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.viewModels
 import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
@@ -23,9 +26,12 @@ import com.puretv.player.core.theme.PureTvTheme
 import com.puretv.player.core.theme.TvUiConfig
 import com.puretv.player.core.util.DeviceUtils
 import com.puretv.player.data.prefs.AppSettings
+import com.puretv.player.player.FloatingPlayerController
+import com.puretv.player.player.SystemFloatingWindowManager
 import dagger.hilt.android.AndroidEntryPoint
 import androidx.navigation.compose.rememberNavController
 import org.json.JSONObject
+import javax.inject.Inject
 
 /**
  * 单 Activity 承载全部页面（TV / 手机双形态）。
@@ -36,6 +42,14 @@ import org.json.JSONObject
 class MainActivity : ComponentActivity() {
 
     private val mainViewModel: MainViewModel by viewModels()
+
+    @Inject
+    lateinit var floatingPlayerController: FloatingPlayerController
+
+    // 悬浮窗管理器：应用启动即注入实例化（Hilt 单例首次注入才创建），
+    // 其内部监听负责显示/收起/重试；不注入则整个悬浮层是死代码（用户反馈：只有声音没窗口）
+    @Inject
+    lateinit var floatingWindowManager: SystemFloatingWindowManager
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -50,14 +64,22 @@ class MainActivity : ComponentActivity() {
                 // 首帧前保持窗口底色（深/浅随系统），避免闪屏
                 Modifier.fillMaxSize().background(Color.Transparent)
             } else {
-                PureTvApp(current)
+                PureTvApp(current, floatingPlayerController)
             }
+        }
+    }
+
+    // 弹窗悬浮窗「还原」：singleTask 复用本实例，转发为跳转播放页事件
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        if (intent?.action == FloatingPlayerController.ACTION_EXPAND) {
+            floatingPlayerController.requestExpandToPlayer()
         }
     }
 }
 
 @Composable
-private fun PureTvApp(settings: AppSettings) {
+private fun PureTvApp(settings: AppSettings, floatingController: FloatingPlayerController) {
     val (accent, highlight) = parseSkinColors(settings.customSkinJson)
     PureTvTheme(
         themeMode = settings.themeMode,
@@ -74,18 +96,27 @@ private fun PureTvApp(settings: AppSettings) {
         val context = LocalContext.current
         val isTv = remember(context) { DeviceUtils.isTvDevice(context) }
         val startDestination = if (settings.onboardingDone) Routes.HOME else Routes.GUIDE
-        if (isTv) {
-            // TV 形态：遥控器 D-pad 焦点导航（保持既有横屏体验）
-            AppNavHost(
-                navController = navController,
-                startDestination = startDestination,
-            )
-        } else {
-            // 手机形态（手机优先）：底部浮动标签栏 + 标准手机返回栈
-            PhoneShell(
-                navController = navController,
-                startDestination = startDestination,
-            )
+        Box(modifier = Modifier.fillMaxSize()) {
+            if (isTv) {
+                // TV 形态：遥控器 D-pad 焦点导航（保持既有横屏体验）
+                AppNavHost(
+                    navController = navController,
+                    startDestination = startDestination,
+                )
+            } else {
+                // 手机形态（手机优先）：底部浮动标签栏 + 标准手机返回栈
+                PhoneShell(
+                    navController = navController,
+                    startDestination = startDestination,
+                )
+            }
+        }
+
+        // 弹窗悬浮窗「还原」：拉起应用后跳转播放页全屏接管（系统悬浮层自行收起）
+        LaunchedEffect(navController) {
+            floatingController.expandToPlayer.collect {
+                navController.navigate(Routes.PLAYBACK)
+            }
         }
     }
 }

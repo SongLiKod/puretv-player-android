@@ -55,6 +55,7 @@ import androidx.compose.material.icons.filled.Forward30
 import androidx.compose.material.icons.filled.Fullscreen
 import androidx.compose.material.icons.filled.FullscreenExit
 import androidx.compose.material.icons.filled.Pause
+import androidx.compose.material.icons.filled.PictureInPicture
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Replay10
 import androidx.compose.material.icons.filled.SkipNext
@@ -133,6 +134,8 @@ import com.puretv.player.data.local.entity.EpgProgramEntity
 import com.puretv.player.data.prefs.SettingsRepository
 import com.puretv.player.data.repository.FavoritesRepository
 import com.puretv.player.player.AspectRatioMode
+import com.puretv.player.player.FloatingPlayerController
+import com.puretv.player.player.SystemFloatingWindowManager
 import com.puretv.player.player.PlaybackEngine
 import com.puretv.player.player.PlaybackEngineImpl
 import com.puretv.player.player.PlaybackMode
@@ -159,12 +162,47 @@ import kotlin.math.abs
 @HiltViewModel
 class PlaybackViewModel @Inject constructor(
     val engine: PlaybackEngine,
+    private val floatingPlayer: FloatingPlayerController,
+    private val floatWindowManager: SystemFloatingWindowManager,
     private val channelDao: ChannelDao,
     private val channelSettingDao: ChannelSettingDao,
     private val epgDao: EpgDao,
     private val settingsRepository: SettingsRepository,
     favoritesRepository: FavoritesRepository,
 ) : ViewModel() {
+
+    /** 弹窗播放状态（小窗悬浮接管画面时，播放页退出不释放内核） */
+    val isFloating: StateFlow<Boolean> = floatingPlayer.isFloating
+
+    /** 进入弹窗播放：置标志 + 同步添加系统悬浮窗（随后调用方退出播放页） */
+    fun enterFloatMode() {
+        floatingPlayer.enter()
+        floatWindowManager.show()
+    }
+
+    /**
+     * 点「弹窗」但尚未授予悬浮窗权限：标记待决并跳系统设置
+     * 「显示在其他应用上层」；用户授权返回后（播放页 ON_RESUME）继续弹窗流程。
+     */
+    fun requestOverlayPermission(activity: android.app.Activity?) {
+        if (activity == null) return
+        floatingPlayer.markPermissionPending()
+        activity.startActivity(
+            android.content.Intent(
+                android.provider.Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                android.net.Uri.parse("package:${activity.packageName}"),
+            ),
+        )
+    }
+
+    fun consumePermissionPending(): Boolean = floatingPlayer.consumePermissionPending()
+
+    /** 退出弹窗播放（重新进入播放页全屏接管） */
+    fun exitFloatMode() {
+        floatingPlayer.exit()
+    }
+
+    fun isFloatingActive(): Boolean = floatingPlayer.isFloating.value
 
     val channels: StateFlow<List<ChannelEntity>> = channelDao.observeAll()
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
@@ -256,6 +294,7 @@ fun PlaybackScreen(nav: NavHostController) {
 
     // 需求 5.1/6.1：播放页保持屏幕常亮；退出时写记录并停止。
     // 手机端默认竖屏播放，进入/退出全屏切换横竖屏；退出播放恢复原方向。TV 本身恒为横屏不受影响。
+    // 弹窗播放中退出不停止（小窗接管画面继续播放，追加需求）。
     DisposableEffect(activity) {
         activity?.window?.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         val previousOrientation = activity?.requestedOrientation
@@ -264,9 +303,12 @@ fun PlaybackScreen(nav: NavHostController) {
             if (activity != null && previousOrientation != null) {
                 activity.requestedOrientation = previousOrientation
             }
-            engine.stop()
+            if (!viewModel.isFloatingActive()) engine.stop()
         }
     }
+
+    // 重新进入播放页 = 全屏接管：收起弹窗小窗
+    LaunchedEffect(Unit) { viewModel.exitFloatMode() }
 
     if (activity != null && !isTv) {
         LaunchedEffect(fullscreen) {
@@ -279,6 +321,8 @@ fun PlaybackScreen(nav: NavHostController) {
     }
 
     // 后台时释放播放器，回前台按原进度续播（低配盒子防内存泄漏，需求 5.1/6.1）
+    // 弹窗播放中不释放：导航 2.7+ 每个页面独立 lifecycle，退出播放页会派发 ON_STOP，
+    // 若此处无条件 release，小窗将拿到已释放的播放器（用户反馈：一点弹窗就暂停、播放键全失灵）
     val lifecycleOwner = LocalLifecycleOwner.current
     DisposableEffect(lifecycleOwner) {
         var stopped = false
@@ -286,9 +330,21 @@ fun PlaybackScreen(nav: NavHostController) {
         val observer = LifecycleEventObserver { _, event ->
             when (event) {
                 Lifecycle.Event.ON_STOP -> {
-                    stopped = true
-                    resumePosition = engine.state.value.positionMs
-                    engine.release()
+                    if (!viewModel.isFloatingActive()) {
+                        stopped = true
+                        resumePosition = engine.state.value.positionMs
+                        engine.release()
+                    }
+                }
+
+                Lifecycle.Event.ON_RESUME -> {
+                    // 悬浮窗权限申请返回：已授权则继续弹窗流程（点弹窗时被权限拦截的用户路径）
+                    if (viewModel.consumePermissionPending() &&
+                        android.provider.Settings.canDrawOverlays(context)
+                    ) {
+                        viewModel.enterFloatMode()
+                        nav.popBackStack()
+                    }
                 }
 
                 Lifecycle.Event.ON_START -> {
@@ -405,6 +461,20 @@ fun PlaybackScreen(nav: NavHostController) {
     fun exit() {
         engine.stop()
         nav.popBackStack()
+    }
+
+    // 弹窗播放统一入口：已授权 → 直接弹出系统悬浮窗并退出播放页；
+    // 未授权 → 跳系统设置「显示在其他应用上层」，授权返回后（ON_RESUME）自动续弹
+    val enterFloatOrRequestPermission: () -> Unit = {
+        if (android.provider.Settings.canDrawOverlays(context)) {
+            viewModel.enterFloatMode()
+            nav.popBackStack()
+        } else {
+            viewModel.requestOverlayPermission(activity)
+            android.widget.Toast
+                .makeText(context, "请允许「显示在其他应用上层」，返回后自动继续弹窗", android.widget.Toast.LENGTH_LONG)
+                .show()
+        }
     }
 
     // 3 秒无操作自动隐藏（弹窗/抽屉打开时不隐藏；暂停/未起播时常驻，便于随时操作）
@@ -576,6 +646,7 @@ fun PlaybackScreen(nav: NavHostController) {
                     poke()
                     fullscreen = true
                 },
+                onFloat = enterFloatOrRequestPermission,
                 onStop = { exit() },
             )
         } else {
@@ -621,6 +692,7 @@ fun PlaybackScreen(nav: NavHostController) {
                             },
                             onPrevEpisode = { stepEpisode(-1) },
                             onNextEpisode = { stepEpisode(1) },
+                            onFloat = enterFloatOrRequestPermission,
                             onStop = { exit() },
                             onToolbarFocus = { focused ->
                                 toolbarFocused = focused
@@ -658,6 +730,7 @@ fun PlaybackScreen(nav: NavHostController) {
                         },
                         onPrevEpisode = { stepEpisode(-1) },
                         onNextEpisode = { stepEpisode(1) },
+                        onFloat = enterFloatOrRequestPermission,
                         onStop = { exit() },
                     )
                 }
@@ -1077,6 +1150,7 @@ private fun PlaybackToolbar(
     onOpenEpisodes: () -> Unit,
     onPrevEpisode: () -> Unit,
     onNextEpisode: () -> Unit,
+    onFloat: () -> Unit,
     onStop: () -> Unit,
     onToolbarFocus: (Boolean) -> Unit,
 ) {
@@ -1163,6 +1237,12 @@ private fun PlaybackToolbar(
             enabled = !request?.backupUrls.isNullOrEmpty(),
             padding = PaddingValues(horizontal = 18.dp, vertical = 12.dp),
         )
+        TvButton(
+            text = "弹窗",
+            onClick = onFloat,
+            variant = TvButtonVariant.SECONDARY,
+            padding = PaddingValues(horizontal = 18.dp, vertical = 12.dp),
+        )
         Spacer(modifier = Modifier.weight(1f))
         TvButton(
             text = "停止",
@@ -1201,6 +1281,7 @@ private fun PhonePortraitPlayer(
     onPrevEpisode: () -> Unit,
     onNextEpisode: () -> Unit,
     onFullscreen: () -> Unit,
+    onFloat: () -> Unit,
     onStop: () -> Unit,
 ) {
     val colors = PureTvTheme.colors
@@ -1433,6 +1514,8 @@ private fun PhonePortraitPlayer(
                 verticalArrangement = Arrangement.spacedBy(9.dp),
             ) {
                 PortraitPill(icon = Icons.Filled.Fullscreen, label = "全屏") { onFullscreen() }
+                // 弹窗播放（追加需求）：视频缩小为浮动小窗悬浮各界面之上继续播放
+                PortraitPill(icon = Icons.Filled.PictureInPicture, label = "弹窗") { onFloat() }
                 val episodeCount = request?.episodes?.size ?: 0
                 if (episodeCount > 1) {
                     val bufferedCount = request?.episodes?.count { ep -> (preload[ep.url] ?: 0) >= 100 } ?: 0
@@ -1686,6 +1769,7 @@ private fun PhonePlayerControls(
     onOpenEpisodes: () -> Unit,
     onPrevEpisode: () -> Unit,
     onNextEpisode: () -> Unit,
+    onFloat: () -> Unit,
     onStop: () -> Unit,
 ) {
     val colors = PureTvTheme.colors
@@ -1954,6 +2038,12 @@ private fun PhonePlayerControls(
                         onClick = { onMenu(PlaybackMenu.BACKUP) },
                     )
                 }
+                // 弹窗播放（追加需求）：视频缩小为浮动小窗悬浮各界面之上继续播放
+                PhoneControlAction(
+                    icon = Icons.Filled.PictureInPicture,
+                    label = "弹窗",
+                    onClick = onFloat,
+                )
                 PhoneControlAction(icon = Icons.Filled.Stop, label = "退出", onClick = onStop)
                 // 横屏全屏层专用：退回竖屏（手机端 onBack 即「退出全屏」）
                 PhoneControlAction(

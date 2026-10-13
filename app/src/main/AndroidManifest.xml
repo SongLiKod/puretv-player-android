@@ -8,6 +8,8 @@
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <!-- 节目预约提醒通知 -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <!-- 弹窗播放：系统级悬浮窗（显示在其他应用上层，缩小应用后仍在桌面顶层播放） -->
+    <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
     <!-- 本地影音扫描（Android 13+ / 12 及以下） -->
     <uses-permission android:name="android.permission.READ_MEDIA_VIDEO" />
     <uses-permission
