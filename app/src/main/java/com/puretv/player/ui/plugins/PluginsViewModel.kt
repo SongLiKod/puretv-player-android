@@ -4,11 +4,15 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.puretv.player.data.model.ImportProgress
 import com.puretv.player.data.plugin.PluginManager
+import com.puretv.player.data.plugin.PluginType
+import com.puretv.player.data.prefs.SettingsRepository
+import com.puretv.player.ui.settings.SkinPreset
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import javax.inject.Inject
@@ -26,6 +30,7 @@ data class PluginInstallUi(
 @HiltViewModel
 class PluginsViewModel @Inject constructor(
     private val pluginManager: PluginManager,
+    private val settingsRepository: SettingsRepository,
 ) : ViewModel() {
 
     /** 目录 + 本地安装状态（数据库变化实时驱动 UI） */
@@ -63,7 +68,12 @@ class PluginsViewModel @Inject constructor(
                         percent = p.percent,
                     )
                 }
-                _notice.value = "已安装并启用：${entity.name}"
+                val skinApplied = applySkinIfMatch(id)
+                _notice.value = if (skinApplied) {
+                    "已安装并应用皮肤：${entity.name}"
+                } else {
+                    "已安装并启用：${entity.name}"
+                }
             } catch (e: kotlinx.coroutines.CancellationException) {
                 throw e
             } catch (e: Exception) {
@@ -78,6 +88,9 @@ class PluginsViewModel @Inject constructor(
         viewModelScope.launch {
             try {
                 pluginManager.uninstall(id)
+                // 皮肤插件卸载：若正使用该皮肤，自动恢复默认主题（设置列表同步移除该选项）
+                val current = settingsRepository.settings.first()
+                if (current.skinId == id) settingsRepository.setSkin("default", null)
                 _notice.value = "已卸载：$name"
             } catch (e: kotlinx.coroutines.CancellationException) {
                 throw e
@@ -91,12 +104,26 @@ class PluginsViewModel @Inject constructor(
         viewModelScope.launch {
             try {
                 pluginManager.setEnabled(id, enabled)
+                if (enabled) applySkinIfMatch(id)
             } catch (e: kotlinx.coroutines.CancellationException) {
                 throw e
             } catch (e: Exception) {
                 _notice.value = e.message ?: "操作失败"
             }
         }
+    }
+
+    /**
+     * 皮肤插件安装/启用即真实换肤：条目 id 与 [SkinPreset] 预设 id 对齐，
+     * 命中则写入设置（主色/高亮色全局生效），返回是否应用。
+     */
+    private suspend fun applySkinIfMatch(id: String): Boolean {
+        val item = runCatching { pluginManager.observeCatalog().first() }
+            .getOrNull()?.firstOrNull { it.id == id } ?: return false
+        if (item.type != PluginType.SKIN) return false
+        val preset = SkinPreset.ALL.firstOrNull { it.id == id } ?: return false
+        settingsRepository.setSkin(preset.id, preset.toJson())
+        return true
     }
 
     fun clearNotice() {

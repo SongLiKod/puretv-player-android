@@ -28,6 +28,9 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.filterNotNull
+import kotlinx.coroutines.flow.firstOrNull
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.map
@@ -54,7 +57,7 @@ class LiveViewModel @Inject constructor(
     private val epgRepository: EpgRepository,
     private val favoritesRepository: FavoritesRepository,
     private val reminderScheduler: ReminderScheduler,
-    settingsRepository: SettingsRepository,
+    private val settingsRepository: SettingsRepository,
     private val playbackEngine: PlaybackEngine,
     @IoDispatcher private val io: CoroutineDispatcher,
 ) : ViewModel() {
@@ -69,6 +72,20 @@ class LiveViewModel @Inject constructor(
 
     private val selectedId = MutableStateFlow<String?>(null)
     val selectedSourceId: StateFlow<String?> = selectedId
+
+    init {
+        // 恢复上次选中的直播源（追加需求：退出软件重进不回默认）
+        viewModelScope.launch {
+            val saved = settingsRepository.selectedLiveSourceId.firstOrNull()
+            if (saved != null) selectedId.compareAndSet(null, saved)
+        }
+        // 任何途径变更选中源（手动切换/导入新源/删除源）都持久化
+        viewModelScope.launch {
+            selectedId.filterNotNull().distinctUntilChanged().collect { id ->
+                settingsRepository.setSelectedLiveSourceId(id)
+            }
+        }
+    }
 
     /** 当前选中源（列表已只含启用源；失效选择自动回落到第一个启用源） */
     val selectedSource: StateFlow<SourceEntity?> = combine(sources, selectedId) { list, id ->

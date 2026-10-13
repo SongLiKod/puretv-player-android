@@ -108,6 +108,21 @@ class SettingsRepository @Inject constructor(
 ) {
     val settings: Flow<AppSettings> = dataStore.data.map { it.toSettings() }
 
+    // —— 页面选中源记忆（追加需求：首页资源站/直播源切换退出重进不回默认）——
+    // 设备本地 UI 状态，不入备份快照（applySnapshot 不含此项）
+
+    val selectedVodSourceId: Flow<String?> = dataStore.data.map { it[KEY_SELECTED_VOD_SOURCE] }
+
+    suspend fun setSelectedVodSourceId(id: String?) = edit {
+        if (id == null) it.remove(KEY_SELECTED_VOD_SOURCE) else it[KEY_SELECTED_VOD_SOURCE] = id
+    }
+
+    val selectedLiveSourceId: Flow<String?> = dataStore.data.map { it[KEY_SELECTED_LIVE_SOURCE] }
+
+    suspend fun setSelectedLiveSourceId(id: String?) = edit {
+        if (id == null) it.remove(KEY_SELECTED_LIVE_SOURCE) else it[KEY_SELECTED_LIVE_SOURCE] = id
+    }
+
     suspend fun setThemeMode(mode: ThemeMode) = edit { it[KEY_THEME] = mode.name }
 
     suspend fun setUiMode(mode: UiMode) = edit { it[KEY_UI_MODE] = mode.name }
@@ -332,6 +347,8 @@ class SettingsRepository @Inject constructor(
         private val KEY_PREMIUM_CLOUD = booleanPreferencesKey("premium_cloud_space")
         private val KEY_PREMIUM_WATERMARK = booleanPreferencesKey("premium_no_watermark")
         private val KEY_ONBOARDING = booleanPreferencesKey("onboarding_done")
+        private val KEY_SELECTED_VOD_SOURCE = stringPreferencesKey("selected_vod_source_id")
+        private val KEY_SELECTED_LIVE_SOURCE = stringPreferencesKey("selected_live_source_id")
         private val KEY_STARTUP = longPreferencesKey("last_startup_at")
     }
 }

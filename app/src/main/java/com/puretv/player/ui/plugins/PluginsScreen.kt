@@ -8,7 +8,6 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
@@ -24,6 +23,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -102,12 +103,17 @@ fun PluginsScreen(
             }
 
             // 三类 Tab：字幕增强 / 资源聚合 / 界面美化（5.7.1）
-            Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+            // 等分屏宽 + 单行居中：此前固定 170dp 宽度，窄屏/大字号下文字被挤成竖排（用户反馈）
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
                 PluginType.ALL.forEach { type ->
                     TabButton(
                         text = PluginType.label(type),
                         selected = type == selectedType,
                         onClick = { selectedType = type },
+                        modifier = Modifier.weight(1f),
                     )
                 }
             }
@@ -175,11 +181,16 @@ fun PluginsScreen(
 private data class PendingUninstall(val id: String, val name: String)
 
 @Composable
-private fun TabButton(text: String, selected: Boolean, onClick: () -> Unit) {
+private fun TabButton(
+    text: String,
+    selected: Boolean,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
     val colors = PureTvTheme.colors
     TvCard(
         onClick = onClick,
-        modifier = Modifier.width(170.dp),
+        modifier = modifier,
         shape = RoundedCornerShape(10.dp),
     ) {
         Text(
@@ -187,7 +198,13 @@ private fun TabButton(text: String, selected: Boolean, onClick: () -> Unit) {
             style = MaterialTheme.typography.bodyLarge.scaled(),
             color = if (selected) colors.highlight else colors.textSecondary,
             fontWeight = if (selected) FontWeight.Medium else FontWeight.Normal,
-            modifier = Modifier.padding(horizontal = 20.dp, vertical = 12.dp),
+            textAlign = TextAlign.Center,
+            maxLines = 1,
+            softWrap = false,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 8.dp, vertical = 12.dp),
         )
     }
 }

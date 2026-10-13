@@ -138,26 +138,21 @@ fun HomeScreen(
             .padding(bottom = LocalPaneBottomPadding.current),
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
-            Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    text = "PureTV 极简影音",
-                    color = colors.textPrimary,
-                    fontSize = if (portrait) 26.sp else 36.sp,
-                    fontWeight = FontWeight.Medium,
-                    maxLines = 1,
-                )
-                Text(
-                    text = "直播 · 点播 · 本地影音 一体化播放",
-                    color = colors.textTertiary,
-                    fontSize = if (portrait) 14.sp else 16.sp,
-                    modifier = Modifier.padding(top = 6.dp),
-                )
-            }
+            Text(
+                text = "PureTV 极简影音",
+                color = colors.textPrimary,
+                fontSize = if (portrait) 26.sp else 36.sp,
+                fontWeight = FontWeight.Medium,
+                maxLines = 1,
+            )
             if (isTv) {
                 ModeBadge(mode = settings?.uiMode ?: UiMode.SIMPLE)
             } else {
-                // 手机：收藏 / 记录小图标入口（顶部模块导航卡已按用户要求去掉）
-                IconButton(onClick = { nav.navigate(Routes.FAVORITES) }) {
+                // 收藏 / 记录入口紧跟标题（追加需求：放在标题后面节约空间）
+                IconButton(
+                    onClick = { nav.navigate(Routes.FAVORITES) },
+                    modifier = Modifier.padding(start = 6.dp),
+                ) {
                     Icon(
                         imageVector = Icons.Default.Favorite,
                         contentDescription = "我的收藏",
@@ -174,7 +169,7 @@ fun HomeScreen(
                     )
                 }
             }
-            // 顶部右上角：切换资源网站（追加需求）
+            // 资源线路切换同样紧跟标题（追加需求）
             SourceSwitcher(
                 sources = vodSources,
                 selectedId = selectedSourceId,
@@ -197,13 +192,13 @@ fun HomeScreen(
             Text(
                 text = "继续观看",
                 color = colors.textPrimary,
-                fontSize = if (portrait) 18.sp else 22.sp,
+                fontSize = if (portrait) 17.sp else 22.sp,
                 fontWeight = FontWeight.Medium,
-                modifier = Modifier.padding(top = if (portrait) 22.dp else 34.dp, bottom = 14.dp),
+                modifier = Modifier.padding(top = if (portrait) 14.dp else 22.dp, bottom = 10.dp),
             )
             LazyRow(
-                horizontalArrangement = Arrangement.spacedBy(16.dp),
-                contentPadding = PaddingValues(end = 16.dp),
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                contentPadding = PaddingValues(end = 12.dp),
             ) {
                 items(recent, key = { it.key }) { item ->
                     HistoryCard(
@@ -224,15 +219,12 @@ fun HomeScreen(
         // 资源站浏览（追加需求：首页可切换当前资源站，显示该资源站网址上的所有视频）
         if (vodSources.isNotEmpty()) {
             SourceBrowseSection(
-                sources = vodSources,
-                selectedId = selectedSourceId,
                 total = selectedSourceTotal,
                 items = sourceItems,
                 portrait = portrait,
-                onSelect = viewModel::selectSource,
                 onLoadMore = viewModel::loadMoreSourceItems,
                 onOpen = { nav.navigate(Routes.vodDetail(it.sourceId, it.id)) },
-                modifier = Modifier.padding(top = if (portrait) 22.dp else 34.dp),
+                modifier = Modifier.padding(top = if (portrait) 16.dp else 24.dp),
             )
         }
     }
@@ -240,53 +232,20 @@ fun HomeScreen(
 
 /**
  * 资源站浏览区（追加需求）：
- * - 顶部站点胶囊横向切换（手机点击 / TV 遥控器焦点选中）；
- * - 下方网格展示该站已缓存影片，滚动到底自动加载下一页（[HomeViewModel.loadMoreSourceItems]）；
- * - 标题行显示该站总片数（源同步回写的 channelCount）。
+ * 直接网格展示当前资源站已缓存影片，滚动到底自动加载下一页（[HomeViewModel.loadMoreSourceItems]）。
+ * 「资源站影片 共N部」标题与站点胶囊标签行按用户要求去掉；站点切换走顶部右上角 SourceSwitcher。
  */
 @Composable
 private fun SourceBrowseSection(
-    sources: List<SourceEntity>,
-    selectedId: String?,
     total: Int,
     items: List<VodItemEntity>,
     portrait: Boolean,
-    onSelect: (String) -> Unit,
     onLoadMore: () -> Unit,
     onOpen: (VodItemEntity) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val colors = LocalPureTvColors.current
     Column(modifier = modifier.fillMaxWidth()) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Text(
-                text = "资源站影片",
-                color = colors.textPrimary,
-                fontSize = if (portrait) 18.sp else 22.sp,
-                fontWeight = FontWeight.Medium,
-            )
-            Text(
-                text = if (total > 0) "共 $total 部" else "${sources.size} 条线路",
-                color = colors.textTertiary,
-                fontSize = 13.sp,
-                modifier = Modifier.padding(start = 10.dp),
-            )
-        }
-
-        LazyRow(
-            modifier = Modifier.padding(top = 10.dp),
-            horizontalArrangement = Arrangement.spacedBy(10.dp),
-        ) {
-            items(sources, key = { it.id }) { source ->
-                SourceChip(
-                    name = source.name,
-                    count = source.channelCount,
-                    selected = source.id == selectedId,
-                    onClick = { onSelect(source.id) },
-                )
-            }
-        }
-
         if (items.isEmpty()) {
             Text(
                 text = "正在载入该资源站影片…",
@@ -344,43 +303,6 @@ private fun SourceBrowseSection(
                     }
                 }
                 }
-            }
-        }
-    }
-}
-
-/** 资源站切换胶囊（选中高亮，TV 端可焦点选中） */
-@Composable
-private fun SourceChip(name: String, count: Int, selected: Boolean, onClick: () -> Unit) {
-    val colors = LocalPureTvColors.current
-    TvCard(
-        onClick = onClick,
-        shape = RoundedCornerShape(18.dp),
-        borderWidth = if (selected) 2.dp else 0.dp,
-        modifier = Modifier.height(40.dp),
-        contentAlignment = Alignment.Center,
-    ) {
-        Row(
-            modifier = Modifier
-                .clip(RoundedCornerShape(18.dp))
-                .background(if (selected) colors.primary.copy(alpha = 0.16f) else colors.card)
-                .padding(horizontal = 14.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Text(
-                text = name,
-                color = if (selected) colors.highlight else colors.textSecondary,
-                fontSize = 14.sp,
-                fontWeight = if (selected) FontWeight.Medium else FontWeight.Normal,
-                maxLines = 1,
-            )
-            if (count > 0) {
-                Text(
-                    text = "$count",
-                    color = colors.textHint,
-                    fontSize = 11.sp,
-                    modifier = Modifier.padding(start = 6.dp),
-                )
             }
         }
     }
@@ -617,18 +539,19 @@ private fun HistoryCard(
     onClick: () -> Unit,
 ) {
     val colors = LocalPureTvColors.current
+    // 卡片紧凑化（追加需求：继续观看占用空间小一点）
     TvCard(
         onClick = onClick,
         modifier = Modifier
-            .width(240.dp)
-            .height(116.dp),
+            .width(196.dp)
+            .height(92.dp),
         contentAlignment = Alignment.TopStart,
     ) {
-        Column(modifier = Modifier.fillMaxSize().padding(18.dp)) {
+        Column(modifier = Modifier.fillMaxSize().padding(12.dp)) {
             Text(
                 text = item.title,
                 color = colors.textPrimary,
-                fontSize = 17.sp,
+                fontSize = 15.sp,
                 fontWeight = FontWeight.Medium,
                 maxLines = 1,
             )
@@ -636,31 +559,31 @@ private fun HistoryCard(
                 Text(
                     text = it,
                     color = colors.textTertiary,
-                    fontSize = 14.sp,
-                    modifier = Modifier.padding(top = 4.dp),
+                    fontSize = 12.sp,
+                    modifier = Modifier.padding(top = 3.dp),
                 )
             }
             Text(
                 text = if (item.isFinished) "已看完"
                 else "看到 ${TimeUtils.formatDuration(item.positionMs)}",
                 color = if (item.isFinished) colors.success else colors.textTertiary,
-                fontSize = 14.sp,
-                modifier = Modifier.padding(top = 4.dp),
+                fontSize = 12.sp,
+                modifier = Modifier.padding(top = 3.dp),
             )
             if (item.durationMs > 0) {
                 val progress = (item.positionMs * 100 / item.durationMs).toInt().coerceIn(0, 100)
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(top = 8.dp)
-                        .height(4.dp)
+                        .padding(top = 6.dp)
+                        .height(3.dp)
                         .clip(RoundedCornerShape(2.dp))
                         .background(colors.divider),
                 ) {
                     Box(
                         modifier = Modifier
                             .fillMaxWidth(progress / 100f)
-                            .height(4.dp)
+                            .height(3.dp)
                             .background(if (item.isFinished) colors.success else colors.primary),
                     )
                 }

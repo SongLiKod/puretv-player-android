@@ -15,6 +15,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -22,6 +23,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.puretv.player.core.theme.FocusStyle
 import com.puretv.player.core.theme.LayoutDensity
 import com.puretv.player.core.theme.PureTvTheme
@@ -46,6 +48,7 @@ fun AppearanceSection(
 ) {
     val colors = PureTvTheme.colors
     val current = settings ?: return
+    val installedSkinIds by viewModel.installedSkinIds.collectAsStateWithLifecycle()
     Column(
         modifier = modifier.fillMaxWidth(),
         verticalArrangement = Arrangement.spacedBy(18.dp),
@@ -105,7 +108,11 @@ fun AppearanceSection(
                 )
             }
 
-            SkinSection(current = current, onApply = viewModel::applySkin)
+            SkinSection(
+                current = current,
+                onApply = viewModel::applySkin,
+                installedSkinIds = installedSkinIds,
+            )
 
             SettingGroup(title = "拓展能力") {
                 SettingRow(
@@ -146,13 +153,18 @@ private fun formatScale(scale: Float): String = when {
     else -> "1.5"
 }
 
-/** 自定义皮肤：仅主色/高亮色两项取值，限定品牌蓝体系（配色禁忌 7.3：全局仅蓝白灰黑） */
+/** 自定义皮肤：内置皮肤常驻；皮肤插件对应预设仅在插件已安装时出现（卸载即消失） */
 @Composable
-private fun SkinSection(current: AppSettings, onApply: (SkinPreset) -> Unit) {
+private fun SkinSection(
+    current: AppSettings,
+    onApply: (SkinPreset) -> Unit,
+    installedSkinIds: Set<String>,
+) {
     val colors = PureTvTheme.colors
     val selected = SkinPreset.from(current)
-    SettingGroup(title = "自定义皮肤", subtitle = "仅开放主色与高亮色，且限定品牌蓝体系，杜绝杂色混用") {
-        SkinPreset.ALL.forEach { preset ->
+    val visible = SkinPreset.ALL.filter { it.builtIn || it.id in installedSkinIds }
+    SettingGroup(title = "自定义皮肤", subtitle = "皮肤插件在「插件市场 → 界面美化」安装，卸载后对应选项消失") {
+        visible.forEach { preset ->
             SkinPresetRow(
                 preset = preset,
                 active = preset.id == selected.id,

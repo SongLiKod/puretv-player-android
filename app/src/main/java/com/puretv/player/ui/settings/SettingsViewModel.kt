@@ -52,6 +52,7 @@ class SettingsViewModel @Inject constructor(
     private val backupManager: BackupManager,
     private val syncManager: SyncManager,
     private val playbackEngine: PlaybackEngine,
+    private val pluginManager: com.puretv.player.data.plugin.PluginManager,
 ) : ViewModel() {
 
     val settings: StateFlow<AppSettings?> = settingsRepository.settings
@@ -59,6 +60,15 @@ class SettingsViewModel @Inject constructor(
 
     val sources: StateFlow<List<SourceEntity>> = sourceRepository.sources
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+
+    /** 已安装的皮肤插件 id 集合（设置页皮肤列表按此过滤：装了才出现，卸载即消失） */
+    val installedSkinIds: StateFlow<Set<String>> = pluginManager.observeCatalog()
+        .map { list ->
+            list.filter { it.type == com.puretv.player.data.plugin.PluginType.SKIN && it.installed }
+                .map { it.id }
+                .toSet()
+        }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptySet())
 
     val lastSyncAt: StateFlow<Long> = syncManager.lastSyncAt
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), 0L)
@@ -92,7 +102,7 @@ class SettingsViewModel @Inject constructor(
     fun setLayoutDensity(density: LayoutDensity) =
         launchSettings { settingsRepository.setLayoutDensity(density) }
 
-    /** 自定义皮肤：仅主色/高亮色两项，且限定在品牌蓝体系内（配色禁忌 7.3） */
+    /** 自定义皮肤：仅主色/高亮色两项；皮肤插件安装后对应预设才可选 */
     fun applySkin(preset: SkinPreset) = launchSettings {
         val json = if (preset.isDefault) null else preset.toJson()
         settingsRepository.setSkin(preset.id, json)

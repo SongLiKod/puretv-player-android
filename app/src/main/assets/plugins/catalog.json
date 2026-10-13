@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "updatedAt": 1760217600000,
-  "checksum": "6b66b7d707287a93f0b46920bf876dce63cc014a9bf7c92934b3826e43e83537",
+  "checksum": "4abbf6468781eea609f969f78e53f2e2e3e97443be56356a52bedba0bc0267ae",
   "note": "PureTV 官方插件目录：仅收录官方审核上架（official=true）插件。sha256 为插件描述串（id|type|version|name|description）的 SHA-256 摘要，安装时逐条校验；checksum 为全部条目摘要的二次汇总校验。",
   "plugins": [
     {
@@ -57,6 +57,51 @@
       "version": "1.0.5",
       "official": true,
       "sha256": "a706de206e2acba4fe6a6ade175ef0057d2ba4f282e91a8db6d4ef852b23878d"
+    },
+    {
+      "id": "skin_teal",
+      "name": "青碧皮肤",
+      "description": "松石青碧主色，清新明快，白天强光环境更清晰",
+      "type": "skin",
+      "version": "1.0.0",
+      "official": true,
+      "sha256": "5a3dd3aae33b4b03859de85821c38892f14cb02dc72548967cca540416c2ec44"
+    },
+    {
+      "id": "skin_emerald",
+      "name": "翡翠皮肤",
+      "description": "深翡翠绿主色，暗色界面沉稳有质感",
+      "type": "skin",
+      "version": "1.0.0",
+      "official": true,
+      "sha256": "b6453ccf141d16339a596dd029e477702876ad98a0090aeb827e7a1f60a574e6"
+    },
+    {
+      "id": "skin_violet",
+      "name": "紫罗兰皮肤",
+      "description": "优雅紫罗兰主色，焦点高亮醒目",
+      "type": "skin",
+      "version": "1.0.0",
+      "official": true,
+      "sha256": "9ae6238cdba8acc16c3dd70487e2e28775590697c7d8f07cbfb8b9921d4edeb6"
+    },
+    {
+      "id": "skin_amber",
+      "name": "暖阳橙皮肤",
+      "description": "暖阳活力橙主色，夜间观影更温暖",
+      "type": "skin",
+      "version": "1.0.0",
+      "official": true,
+      "sha256": "77c72c6d531e627629e236137bb9b4f733e5728eaa0aa1de5c57914596ce0ecf"
+    },
+    {
+      "id": "skin_rose",
+      "name": "绯红皮肤",
+      "description": "玫红点缀主色，个性鲜明不失克制",
+      "type": "skin",
+      "version": "1.0.0",
+      "official": true,
+      "sha256": "28e29aa3c71aec00a908993723ac292fc83a143562831d212bc1f5566e9db967"
     }
   ]
 }
