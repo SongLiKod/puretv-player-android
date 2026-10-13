@@ -59,6 +59,11 @@ class VodViewModel @Inject constructor(
         .map { it.isNotEmpty() }
         .stateIn(viewModelScope, SharingStarted.Eagerly, true)
 
+    /** 资源站 id → 名称（搜索结果显示条目来自哪个资源库） */
+    val sourceNames: StateFlow<Map<String, String>> = vodRepository.vodSources
+        .map { list -> list.associate { it.id to it.name } }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyMap())
+
     /** 当前品类下的 Xtream 分类 */
     val categories: StateFlow<List<String>> = selectedKind
         .flatMapLatest { kind -> vodRepository.observeCategories(kind) }
@@ -107,6 +112,14 @@ class VodViewModel @Inject constructor(
 
     init {
         viewModelScope.launch {
+            // 一次性品类纠正：把误分进电影等品类的动漫内容归回动漫（打开影视页时静默执行）
+            try {
+                vodRepository.reclassifyKindsIfNeeded()
+            } catch (e: CancellationException) {
+                throw e
+            } catch (t: Throwable) {
+                // 纠正失败不影响列表功能
+            }
             // 「本站搜索」默认资源站：未选中时兜底为第一个可用点播源（CMS/Xtream）
             if (selectedSourceStore.selectedSourceId.value == null) {
                 val first = vodRepository.vodSources.first()

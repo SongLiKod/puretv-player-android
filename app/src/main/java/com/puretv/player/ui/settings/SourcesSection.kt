@@ -298,8 +298,11 @@ private fun SourceItemCard(
                         style = MaterialTheme.typography.labelMedium.scaled(),
                         color = if (source.enabled) colors.success else colors.textTertiary,
                     )
+                    // 开关自身可点（用户反馈：此前开关无回调、点击被开关消费成空操作，
+                    // 只能点外面的文字才能切换）；文字/卡片区域点击同样生效
                     TvSwitch(
                         checked = source.enabled,
+                        onCheckedChange = { onEnabledChange(it) },
                         modifier = Modifier.padding(start = 12.dp),
                     )
                 }

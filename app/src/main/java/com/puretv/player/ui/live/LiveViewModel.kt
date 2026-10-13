@@ -59,19 +59,20 @@ class LiveViewModel @Inject constructor(
     @IoDispatcher private val io: CoroutineDispatcher,
 ) : ViewModel() {
 
-    /** 直播源（仅 M3U / Xtream；CMS 聚合点播源不进入直播页） */
+    /**
+     * 直播源（仅启用的 M3U / Xtream；CMS 聚合点播源不进入直播页）。
+     * 与设置 → 源管理联动：设置里停用的源这里同步隐藏（用户反馈：设置关掉了这里还显示）。
+     */
     val sources: StateFlow<List<SourceEntity>> = sourceRepository.sources
-        .map { list -> list.filter { it.type != SourceType.CMS } }
+        .map { list -> list.filter { it.enabled && it.type != SourceType.CMS } }
         .stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
 
     private val selectedId = MutableStateFlow<String?>(null)
     val selectedSourceId: StateFlow<String?> = selectedId
 
-    /** 当前选中源（未选择时取第一个启用源） */
+    /** 当前选中源（列表已只含启用源；失效选择自动回落到第一个启用源） */
     val selectedSource: StateFlow<SourceEntity?> = combine(sources, selectedId) { list, id ->
-        list.firstOrNull { it.id == id }
-            ?: list.firstOrNull { it.enabled }
-            ?: list.firstOrNull()
+        list.firstOrNull { it.id == id } ?: list.firstOrNull()
     }.stateIn(viewModelScope, SharingStarted.Eagerly, null)
 
     /** 是否完全没有源（引导去导入） */

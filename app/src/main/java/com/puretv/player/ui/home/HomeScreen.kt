@@ -3,6 +3,7 @@ package com.puretv.player.ui.home
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -300,16 +301,32 @@ private fun SourceBrowseSection(
                 val lastVisible = info.visibleItemsInfo.lastOrNull()?.index ?: 0
                 if (lastVisible >= items.size - 8 && items.size < total) onLoadMore()
             }
-            LazyVerticalGrid(
-                state = gridState,
-                columns = GridCells.Adaptive(if (portrait) 112.dp else 132.dp),
-                horizontalArrangement = Arrangement.spacedBy(12.dp),
-                verticalArrangement = Arrangement.spacedBy(12.dp),
-                contentPadding = PaddingValues(top = 12.dp, bottom = 4.dp),
-                modifier = Modifier
-                    .height(if (portrait) 430.dp else 520.dp)
-                    .fillMaxWidth(),
-            ) {
+            // 网格高度按实际行数收敛（此前固定 430dp，影片少时底部空出一大块，用户反馈）；
+            // 超过 430dp 才封顶，由网格内部继续滚动。列数按 GridCells.Adaptive 同款公式推算。
+            BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
+                val cellWidth = if (portrait) 112.dp else 132.dp
+                val space = 12.dp
+                val columns = ((maxWidth + space) / (cellWidth + space)).toInt().coerceAtLeast(1)
+                val rows = (items.size + columns - 1) / columns
+                // Adaptive 单元格会均分拉伸到 ≥ 最小宽：按拉伸后的实际格宽算行高（2:3 竖版），
+                // 否则行高被低估、网格底边界把末行海报切掉一半（用户反馈：底部导航处有一块被遮挡）
+                val stretchedCell = (maxWidth - space * (columns - 1)) / columns
+                val natural = 14.dp + stretchedCell * 1.5f * rows + space * (rows - 1) + 4.dp
+                // 封顶按屏幕高度动态取（此前固定 430dp 会把常见的两行海报拦腰切断）：
+                // 常规两/三行完整展示，超长时才由网格内部滚动、边界半行为可滚动提示
+                val screenHeight =
+                    androidx.compose.ui.platform.LocalConfiguration.current.screenHeightDp
+                val heightCap = (screenHeight - 240).coerceIn(430, 900).dp
+                LazyVerticalGrid(
+                    state = gridState,
+                    columns = GridCells.Adaptive(cellWidth),
+                    horizontalArrangement = Arrangement.spacedBy(space),
+                    verticalArrangement = Arrangement.spacedBy(space),
+                    contentPadding = PaddingValues(top = 12.dp, bottom = 4.dp),
+                    modifier = Modifier
+                        .height(minOf(natural, heightCap))
+                        .fillMaxWidth(),
+                ) {
                 items(items, key = { "${it.sourceId}|${it.id}" }) { item ->
                     VodPosterCard(item = item, onClick = { onOpen(item) })
                 }
@@ -325,6 +342,7 @@ private fun SourceBrowseSection(
                                 .padding(vertical = 12.dp),
                         )
                     }
+                }
                 }
             }
         }

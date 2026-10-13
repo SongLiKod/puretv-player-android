@@ -258,6 +258,10 @@ interface VodDao {
     @Query("SELECT * FROM vod_items WHERE kind = :kind AND category = :category ORDER BY updatedAt DESC")
     fun observeByCategory(kind: String, category: String): Flow<List<VodItemEntity>>
 
+    /** 「全部」品类下按分类过滤（用户反馈：选分类内容不变——此前 kind=null 时分类被忽略） */
+    @Query("SELECT * FROM vod_items WHERE category = :category ORDER BY updatedAt DESC")
+    fun observeByCategoryAll(category: String): Flow<List<VodItemEntity>>
+
     @Query(
         "SELECT * FROM vod_items WHERE title LIKE '%' || :query || '%' ORDER BY updatedAt DESC"
     )
@@ -282,6 +286,10 @@ interface VodDao {
 
     @Query("SELECT DISTINCT category FROM vod_items WHERE kind = :kind AND category IS NOT NULL ORDER BY category ASC")
     fun observeCategories(kind: String): Flow<List<String>>
+
+    /** 一次性品类纠正用读取：有分类名的全部条目 */
+    @Query("SELECT * FROM vod_items WHERE category IS NOT NULL AND category != ''")
+    suspend fun getAllWithCategory(): List<VodItemEntity>
 
     @Query("SELECT kind, COUNT(*) AS cnt FROM vod_items GROUP BY kind")
     fun observeKindCounts(): Flow<List<KindCount>>

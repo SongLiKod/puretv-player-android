@@ -4,6 +4,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.aspectRatio
@@ -314,25 +315,30 @@ private fun DetailInfoSection(
             }
             Row(
                 modifier = Modifier.padding(top = 18.dp),
-                horizontalArrangement = Arrangement.spacedBy(16.dp),
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 if (!isSeries) {
                     TvButton(text = "播放", onClick = onPlay, enabled = !debridResolving)
                 }
                 if (canContinue) {
+                    // 继续按钮限宽：空间不足时先行收缩并省略号（用户反馈：过宽把 Debrid 挤成竖线）
                     TvButton(
                         text = resumeLabel ?: "继续观看",
                         onClick = onContinue,
                         variant = TvButtonVariant.SECONDARY,
                         enabled = !debridResolving,
+                        padding = PaddingValues(horizontal = 18.dp, vertical = 10.dp),
+                        modifier = Modifier.weight(1f, fill = false),
                     )
                 }
+                // Debrid 稍小一号（用户反馈），且不参与收缩、保证完整可点
                 TvButton(
                     text = if (debridResolving) "解析中…" else "Debrid 加速",
                     onClick = onDebridPlay,
                     variant = TvButtonVariant.SECONDARY,
                     enabled = !debridResolving,
+                    padding = PaddingValues(horizontal = 16.dp, vertical = 10.dp),
                 )
             }
         }

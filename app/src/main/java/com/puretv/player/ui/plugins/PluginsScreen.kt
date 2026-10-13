@@ -274,7 +274,11 @@ private fun PluginCard(
                         shape = RoundedCornerShape(10.dp),
                     ) {
                         Box(modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp)) {
-                            TvSwitch(checked = item.enabled)
+                            // 开关自身可点（与源管理一致：无回调时开关会吞掉点击导致点按无效）
+                            TvSwitch(
+                                checked = item.enabled,
+                                onCheckedChange = { onEnabledChange(it) },
+                            )
                         }
                     }
                     TvButton(

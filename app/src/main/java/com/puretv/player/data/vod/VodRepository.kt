@@ -77,6 +77,9 @@ class VodRepository @Inject constructor(
      */
     @OptIn(ExperimentalCoroutinesApi::class)
     fun observeItems(kind: String?, category: String?): Flow<List<VodItemEntity>> = when {
+        // 「全部」品类 + 选定分类：跨品类按分类过滤（此前被忽略导致切分类内容不变）
+        kind.isNullOrBlank() && !category.isNullOrBlank() ->
+            vodDao.observeByCategoryAll(category)
         kind.isNullOrBlank() -> combine(ALL_KINDS.map { vodDao.observeByKind(it) }) { arrays ->
             arrays.flatMap { it }.sortedByDescending { it.updatedAt }
         }
@@ -98,6 +101,32 @@ class VodRepository @Inject constructor(
     }
 
     suspend fun getItem(sourceId: String, id: String): VodItemEntity? = vodDao.get(sourceId, id)
+
+    /** 品类纠正是否已执行（进程内一次即可，纠正的是历史同步写入的旧归类） */
+    private var kindsReclassified = false
+
+    /**
+     * 一次性品类纠正（用户反馈：「全部」里有大量动漫内容，切到「动漫」标签却看不到）。
+     * 旧归类规则把「少儿/国漫/卡通/XX动漫电影」等动画面向分类误分进电影，且分类名已随
+     * 同步存库——仅改规则只对新同步生效，这里按存量条目的分类名把动漫内容纠正回动漫，
+     * 单向移动（只改判为动漫的），不影响剧集等其他既有归类。
+     */
+    suspend fun reclassifyKindsIfNeeded() {
+        if (kindsReclassified) return
+        kindsReclassified = true
+        withContext(io) {
+            val rows = vodDao.getAllWithCategory()
+            val updates = rows.mapNotNull { item ->
+                val category = item.category.orEmpty()
+                if (item.kind != VodKind.ANIME && VodKindClassifier.isAnimeCategory(category)) {
+                    item.copy(kind = VodKind.ANIME)
+                } else {
+                    null
+                }
+            }
+            updates.chunked(300).forEach { vodDao.upsertAll(it) }
+        }
+    }
 
     /**
      * 观察剧集分集列表（缓存为空时自动从 Xtream 拉取 get_vod_info 解析分集）
@@ -268,6 +297,20 @@ class VodRepository @Inject constructor(
                 }
             }
             all
+        } else if (playSources.size > 1) {
+            // 电影多线路：每条线路存一行（season=线路序号、episode=1、title=线路名），
+            // 播放时作为备用线路（主线路 403/失效自动切换），详情页按 kind=电影不显示选集
+            playSources.mapIndexed { lineIndex, line ->
+                val first = line.episodes.first()
+                VodEpisodeEntity(
+                    sourceId = source.id,
+                    seriesId = id,
+                    season = lineIndex + 1,
+                    episode = 1,
+                    title = line.name,
+                    playUrl = first.url,
+                )
+            }
         } else {
             emptyList()
         }
@@ -775,8 +818,10 @@ class VodRepository @Inject constructor(
 
 /**
  * 品类归类启发式（需求 5.4.1 全品类聚合）：
- * 含"电影/剧场"→电影、含"剧/连续剧"→电视剧、含"综艺"→综艺、含"动漫/动画"→动漫、默认电影；
- * 服务端标注 stream_type=series 时按电视剧处理。
+ * 含"动漫/动画/卡通/漫画/少儿/国漫/国创"→动漫、含"电影/剧场"→电影、含"剧/连续剧"→电视剧、
+ * 含"综艺"→综艺、默认电影；服务端标注 stream_type=series 时按电视剧处理。
+ * 动漫判定优先于电影/剧（用户反馈：「全部」里大量动漫内容，切到「动漫」标签却看不到——
+ * 旧规则「电影」在前且缺关键词，把「少儿/国漫/卡通/XX动漫电影」等都归进了电影）。
  */
 object VodKindClassifier {
     fun of(streamType: String?, categoryName: String): String = when {
@@ -784,11 +829,19 @@ object VodKindClassifier {
         else -> ofCategory(categoryName)
     }
 
+    /** 动漫类分类关键词（含动画面向的少儿/国创等细分，命中即归动漫） */
+    private val ANIME_KEYWORDS = listOf(
+        "动漫", "动画", "卡通", "漫画", "少儿", "国漫", "日漫", "国创", "奥特曼", "熊出没",
+    )
+
+    fun isAnimeCategory(categoryName: String): Boolean =
+        ANIME_KEYWORDS.any { categoryName.contains(it) }
+
     fun ofCategory(categoryName: String): String = when {
+        isAnimeCategory(categoryName) -> VodKind.ANIME
         categoryName.contains("电影") || categoryName.contains("剧场") -> VodKind.MOVIE
         categoryName.contains("剧") || categoryName.contains("连续剧") -> VodKind.SERIES
         categoryName.contains("综艺") -> VodKind.VARIETY
-        categoryName.contains("动漫") || categoryName.contains("动画") -> VodKind.ANIME
         else -> VodKind.MOVIE
     }
 }

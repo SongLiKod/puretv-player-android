@@ -71,6 +71,11 @@ data class PlaybackEpisode(
     val subtitle: String? = null,
     /** 该集断点续播起播位置 */
     val startPositionMs: Long = 0L,
+    /**
+     * 该集备用线路地址（同片其他播放线路的同集地址）。
+     * 主线路播放失败时内核自动切换，播放页「备用源」按钮也随之可用（用户反馈：备用线路点不了）。
+     */
+    val backups: List<String> = emptyList(),
 )
 
 /** 音轨/字幕轨选项（需求 5.5.4：字幕加载、音轨切换） */

@@ -36,6 +36,7 @@ object PlayerRequests {
         subtitle: String? = null,
         headers: Map<String, String> = emptyMap(),
         episodes: List<PlaybackEpisode> = emptyList(),
+        backupUrls: List<String> = emptyList(),
     ): PlaybackRequest = PlaybackRequest(
         url = playUrl,
         title = item.title,
@@ -49,6 +50,10 @@ object PlayerRequests {
         episodeLabel = episodeLabel,
         sourceId = item.sourceId,
         episodes = episodes,
+        // 备用线路：优先取显式传入（电影多线路）；否则按当前播放地址从选集列表推导
+        backupUrls = backupUrls.ifEmpty {
+            episodes.firstOrNull { it.url == playUrl }?.backups.orEmpty()
+        },
     )
 
     /**
@@ -64,18 +69,42 @@ object PlayerRequests {
         val all = episodes.filter { it.playUrl.isNotBlank() }
         if (all.isEmpty()) return emptyList()
         val multiSeason = all.map { it.season }.distinct().size > 1
+        // 多线路且每条线路仅 1 集（MacCMS 电影多线路）：标签用「线路N」而非「第1集」
+        val lineStyle = multiSeason && all.groupBy { it.season }.values.all { it.size == 1 }
+        // 同集号在其他线路（季）的地址 = 该集备用线路（主线路失败自动切换/手动切换）
+        val byEpisodeNumber = all.groupBy { it.episode }
         return all.map { ep ->
-            val label = "第${ep.episode}集"
+            val label = if (lineStyle) "线路${ep.season}" else "第${ep.episode}集"
+            val backups = byEpisodeNumber[ep.episode].orEmpty()
+                .filter { it.season != ep.season && it.playUrl != ep.playUrl }
+                .map { it.playUrl }
+                .distinct()
+                .take(3)
             PlaybackEpisode(
                 label = label,
                 url = ep.playUrl,
                 season = if (multiSeason) ep.season else 1,
                 historyTargetId = "$itemId|$label",
-                subtitle = listOfNotNull(label, ep.title).joinToString(" · "),
+                subtitle = listOfNotNull(label, ep.title.takeIf { it != label })
+                    .joinToString(" · "),
                 startPositionMs = resumePosition(label),
+                backups = backups,
             )
         }
     }
+
+    /**
+     * 电影多线路备用地址：同片其他线路的播放地址（[episodes] 为影片全部线路行，
+     * 每线路 season+1、episode=1，由 MacCMS 映射时写入）。
+     */
+    fun movieBackups(
+        episodes: List<VodEpisodeEntity>,
+        playUrl: String,
+    ): List<String> = episodes
+        .filter { it.playUrl.isNotBlank() && it.playUrl != playUrl }
+        .map { it.playUrl }
+        .distinct()
+        .take(3)
 
     /** 本地视频播放请求 */
     fun local(mediaId: String, uri: String, displayName: String, startPositionMs: Long = 0L): PlaybackRequest =

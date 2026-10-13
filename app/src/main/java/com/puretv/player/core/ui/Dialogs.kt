@@ -8,10 +8,13 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -50,6 +53,11 @@ fun TvDialog(
     content: @Composable ColumnScope.() -> Unit,
 ) {
     val colors = LocalPureTvColors.current
+    // 高度按屏幕自适应封顶 + 内容可滚动（用户反馈：直播源管理弹窗内容一多就超出屏幕，
+    // 底部「导入/完成」按钮够不着且无法滚动，完全没法使用）
+    val configuration = androidx.compose.ui.platform.LocalConfiguration.current
+    val maxHeight = minOf(MAX_DIALOG_HEIGHT, (configuration.screenHeightDp * 0.86f).dp)
+    val portrait = isPortrait()
     Dialog(
         onDismissRequest = onDismiss,
         properties = DialogProperties(
@@ -60,19 +68,24 @@ fun TvDialog(
     ) {
         Column(
             modifier = modifier
-                .padding(horizontal = 48.dp)
+                .padding(
+                    horizontal = if (portrait) 16.dp else 48.dp,
+                    vertical = if (portrait) 16.dp else 24.dp,
+                )
                 .fillMaxWidth()
                 .widthIn(max = maxWidth)
+                .heightIn(max = maxHeight)
                 .clip(RoundedCornerShape(16.dp))
                 .background(colors.dialog)
                 .border(1.dp, colors.divider, RoundedCornerShape(16.dp))
-                .padding(32.dp),
+                .padding(if (portrait) 20.dp else 32.dp)
+                .verticalScroll(rememberScrollState()),
         ) {
             if (title != null) {
                 androidx.compose.material3.Text(
                     text = title,
                     color = colors.textPrimary,
-                    fontSize = 24.sp,
+                    fontSize = if (portrait) 20.sp else 24.sp,
                     fontWeight = FontWeight.Medium,
                     modifier = Modifier.padding(bottom = 20.dp),
                 )
@@ -81,6 +94,9 @@ fun TvDialog(
         }
     }
 }
+
+/** 弹窗高度上限（再与屏幕高度 86% 取小，保证小屏手机也有上下留白） */
+private val MAX_DIALOG_HEIGHT = 720.dp
 
 /** 确认弹窗：确认/取消双按钮（TV 遥控器 OK 确认、返回取消） */
 @Composable

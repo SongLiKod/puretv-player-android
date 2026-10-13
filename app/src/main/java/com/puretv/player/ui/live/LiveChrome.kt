@@ -1,6 +1,7 @@
 package com.puretv.player.ui.live
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -10,7 +11,9 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -64,38 +67,48 @@ fun LiveHeader(
     modifier: Modifier = Modifier,
 ) {
     val colors = LocalPureTvColors.current
+    val portrait = com.puretv.player.core.ui.isPortrait()
     Row(
         modifier = modifier
             .fillMaxWidth()
-            .padding(horizontal = 32.dp, vertical = 18.dp),
+            .padding(horizontal = if (portrait) 16.dp else 32.dp, vertical = if (portrait) 12.dp else 18.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Text(
             text = "直播",
             color = colors.textPrimary,
-            fontSize = 28.sp,
+            fontSize = if (portrait) 22.sp else 28.sp,
             fontWeight = FontWeight.Medium,
         )
-        Box(modifier = Modifier.width(16.dp))
-        TvButton(
-            text = "源 · $sourceName",
-            onClick = onSourceClick,
-            variant = TvButtonVariant.SECONDARY,
-        )
-        Box(modifier = Modifier.width(16.dp))
-        TvButton(
-            text = "搜索",
-            onClick = onSearchClick,
-            variant = TvButtonVariant.SECONDARY,
-            enabled = hasSource,
-        )
-        Box(modifier = Modifier.width(16.dp))
-        TvButton(
-            text = "四分屏",
-            onClick = onMosaicClick,
-            variant = TvButtonVariant.SECONDARY,
-            enabled = hasSource,
-        )
+        // 当前源胶囊：圆点 + 源名（点按换源），比整块按钮轻
+        Row(
+            modifier = Modifier
+                .padding(start = 14.dp)
+                .clip(RoundedCornerShape(16.dp))
+                .background(colors.card)
+                .clickable(onClick = onSourceClick)
+                .padding(horizontal = 12.dp, vertical = 7.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(7.dp)
+                    .clip(RoundedCornerShape(3.5.dp))
+                    .background(if (hasSource) colors.success else colors.textHint),
+            )
+            Text(
+                text = sourceName,
+                color = colors.textSecondary,
+                fontSize = 14.sp,
+                maxLines = 1,
+                overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                modifier = Modifier.padding(start = 7.dp).widthIn(max = 150.dp),
+            )
+        }
+        Box(modifier = Modifier.weight(1f))
+        TvTextButton(text = "搜索", onClick = onSearchClick, enabled = hasSource)
+        Box(modifier = Modifier.width(4.dp))
+        TvTextButton(text = "四分屏", onClick = onMosaicClick, enabled = hasSource)
     }
 }
 
@@ -217,11 +230,16 @@ fun SourceManageDialog(
                             color = if (selected) colors.primary else colors.textPrimary,
                             fontSize = 17.sp,
                             fontWeight = FontWeight.Medium,
+                            maxLines = 1,
+                            overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
                         )
                         Text(
                             text = "${if (source.type == "xtream") "Xtream" else "M3U"} · ${source.channelCount} 频道",
                             color = colors.textTertiary,
                             fontSize = 14.sp,
+                            maxLines = 1,
+                            overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                            modifier = Modifier.padding(top = 2.dp),
                         )
                     }
                     TvTextButton(text = "刷新", onClick = { viewModel.refreshSource(source.id) })
@@ -232,13 +250,29 @@ fun SourceManageDialog(
                 }
             }
         }
+        // 导入按钮等宽平分（用户反馈：此前横排溢出，手机上按钮被挤出屏幕无法点按）
+        val portrait = com.puretv.player.core.ui.isPortrait()
         Row(
             modifier = Modifier.padding(top = 12.dp),
-            horizontalArrangement = Arrangement.spacedBy(12.dp),
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
         ) {
-            TvButton(text = "M3U 网址导入", onClick = { showM3uImport = true }, variant = TvButtonVariant.SECONDARY)
-            TvButton(text = "Xtream 导入", onClick = { showXtreamImport = true }, variant = TvButtonVariant.SECONDARY)
-            TvButton(text = "完成", onClick = onDismiss)
+            TvButton(
+                text = if (portrait) "M3U 导入" else "M3U 网址导入",
+                onClick = { showM3uImport = true },
+                variant = TvButtonVariant.SECONDARY,
+                modifier = Modifier.weight(1f),
+            )
+            TvButton(
+                text = if (portrait) "Xtream" else "Xtream 导入",
+                onClick = { showXtreamImport = true },
+                variant = TvButtonVariant.SECONDARY,
+                modifier = Modifier.weight(1f),
+            )
+            TvButton(
+                text = "完成",
+                onClick = onDismiss,
+                modifier = Modifier.weight(1f),
+            )
         }
 
         if (showM3uImport) {
@@ -327,10 +361,11 @@ private fun XtreamImportDialog(
     }
 }
 
-/** TvDialog 内嵌输入行（带标题 + 底部分隔线，主题色光标） */
+/** TvDialog 内嵌输入行：可见描边输入框（用户反馈：此前无边框难定位，底部分隔线宽度还被压成 1dp 不可见） */
 @Composable
 private fun InputRow(label: String, value: String, onChange: (String) -> Unit) {
     val colors = LocalPureTvColors.current
+    val shape = RoundedCornerShape(10.dp)
     Column(modifier = Modifier.padding(vertical = 8.dp)) {
         Text(text = label, color = colors.textTertiary, fontSize = 14.sp)
         BasicTextField(
@@ -341,14 +376,11 @@ private fun InputRow(label: String, value: String, onChange: (String) -> Unit) {
             cursorBrush = SolidColor(colors.primary),
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(top = 6.dp),
-        )
-        Box(
-            modifier = Modifier
-                .fillMaxWidth()
                 .padding(top = 6.dp)
-                .width(1.dp)
-                .background(colors.divider),
+                .clip(shape)
+                .background(colors.background)
+                .border(1.dp, colors.divider, shape)
+                .padding(horizontal = 14.dp, vertical = 12.dp),
         )
     }
 }

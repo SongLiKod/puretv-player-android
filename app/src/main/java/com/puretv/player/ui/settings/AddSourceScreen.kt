@@ -52,9 +52,9 @@ import com.puretv.player.core.ui.isPortrait
 /**
  * 在线搜索添加线路（设置 → 源管理 → 在线搜索线路）。
  *
- * 交互（按用户要求）：关键词搜索 → 默认收满 10 条自动停止、搜索中可手动停止 →
- * 推荐关键词（MacCMS 采集协议特征词）一点即搜 → 结果多选 → 批量添加，
- * 添加前自动探测 `api.php/provide/vod` 采集端点，仅可用线路入库。
+ * 交互（用户重做要求：结果必须先验证、可用才能加入）：
+ * 关键词搜索（必应 RSS + GitHub 仓库）→ 候选自动探测采集端点/配置格式并回填状态 →
+ * 仅「✓ 可用」项可勾选 → 批量添加（采集站入库 / TVBox 配置真实解析导入）。
  */
 @Composable
 fun AddSourceScreen(
@@ -62,7 +62,7 @@ fun AddSourceScreen(
     viewModel: AddSourceViewModel = hiltViewModel(),
 ) {
     val colors = PureTvTheme.colors
-    val results by viewModel.results.collectAsStateWithLifecycle()
+    val candidates by viewModel.candidates.collectAsStateWithLifecycle()
     val selected by viewModel.selected.collectAsStateWithLifecycle()
     val searching by viewModel.searching.collectAsStateWithLifecycle()
     val adding by viewModel.adding.collectAsStateWithLifecycle()
@@ -74,7 +74,7 @@ fun AddSourceScreen(
 
     TvScaffold(
         title = "在线搜索线路",
-        subtitle = "搜索全网 MacCMS 采集站，自动探测可用性，多选批量添加",
+        subtitle = "必应 + GitHub 搜索采集站与 TVBox 配置，自动验证可用性，仅可添加已验证线路",
         onBack = { nav.popBackStack() },
     ) {
         Column(
@@ -202,17 +202,20 @@ fun AddSourceScreen(
                 )
             }
 
-            // ---------------- 结果多选列表 ----------------
-            if (results.isEmpty()) {
+            // ---------------- 结果多选列表（带自动验证状态） ----------------
+            if (candidates.isEmpty()) {
                 if (!searching) {
                     Text(
-                        text = "输入关键词或点选上方推荐词开始搜索；结果经可用性探测后批量添加为点播线路。",
+                        text = "输入关键词或点选上方推荐词开始搜索；结果自动探测采集端点 / 配置格式，" +
+                            "仅「✓ 可用」项可勾选加入。",
                         style = MaterialTheme.typography.labelMedium.scaled(),
                         color = colors.textHint,
                         modifier = Modifier.padding(top = 20.dp),
                     )
                 }
             } else {
+                val okCount = candidates.count { it.status == SearchCandidate.Status.OK }
+                val testingCount = candidates.count { it.status == SearchCandidate.Status.TESTING }
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -220,12 +223,14 @@ fun AddSourceScreen(
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     Text(
-                        text = "搜索结果 ${results.size} 条 · 已选 ${selected.size} 条",
+                        text = "共 ${candidates.size} 条 · 可用 $okCount" +
+                            (if (testingCount > 0) " · 检测中 $testingCount" else "") +
+                            " · 已选 ${selected.size}",
                         style = MaterialTheme.typography.bodyMedium.scaled(),
                         color = colors.textPrimary,
                         modifier = Modifier.weight(1f),
                     )
-                    if (selected.size == results.size) {
+                    if (selected.size == okCount && okCount > 0) {
                         TvButton(
                             text = "取消全选",
                             onClick = { viewModel.clearSelection() },
@@ -233,9 +238,10 @@ fun AddSourceScreen(
                         )
                     } else {
                         TvButton(
-                            text = "全选",
+                            text = "全选可用",
                             onClick = { viewModel.selectAll() },
                             variant = TvButtonVariant.GHOST,
+                            enabled = okCount > 0,
                         )
                     }
                     TvButton(
@@ -245,11 +251,11 @@ fun AddSourceScreen(
                         modifier = Modifier.padding(start = 8.dp),
                     )
                 }
-                results.forEach { url ->
+                candidates.forEach { candidate ->
                     SearchResultRow(
-                        url = url,
-                        checked = url in selected,
-                        onClick = { viewModel.toggle(url) },
+                        candidate = candidate,
+                        checked = candidate.url in selected,
+                        onClick = { viewModel.toggle(candidate) },
                     )
                 }
 
@@ -272,16 +278,22 @@ fun AddSourceScreen(
     }
 }
 
-/** 搜索结果行：圆形勾选框 + 地址 + 主机名 */
+/** 搜索结果行：勾选框 + 地址 + 验证状态（检测中 / ✓ 可用 / ✗ 不可用），仅可用项可勾选 */
 @Composable
 private fun SearchResultRow(
-    url: String,
+    candidate: SearchCandidate,
     checked: Boolean,
     onClick: () -> Unit,
 ) {
     val colors = PureTvTheme.colors
-    val host = remember(url) {
-        runCatching { java.net.URI(url).host?.removePrefix("www.") }.getOrNull() ?: url
+    val host = remember(candidate.url) {
+        runCatching { java.net.URI(candidate.url).host?.removePrefix("www.") }.getOrNull() ?: candidate.url
+    }
+    val enabled = candidate.status == SearchCandidate.Status.OK
+    val urlColor = when (candidate.status) {
+        SearchCandidate.Status.TESTING -> colors.textPrimary
+        SearchCandidate.Status.OK -> colors.textPrimary
+        SearchCandidate.Status.FAIL -> colors.textTertiary
     }
     TvCard(
         onClick = onClick,
@@ -302,7 +314,11 @@ private fun SearchResultRow(
                     .size(20.dp)
                     .clip(CircleShape)
                     .background(if (checked) colors.primary else Color.Transparent)
-                    .border(2.dp, if (checked) colors.primary else colors.divider, CircleShape),
+                    .border(
+                        2.dp,
+                        if (checked) colors.primary else colors.divider,
+                        CircleShape,
+                    ),
                 contentAlignment = Alignment.Center,
             ) {
                 if (checked) {
@@ -316,20 +332,57 @@ private fun SearchResultRow(
             }
             Column(modifier = Modifier.padding(start = 12.dp)) {
                 Text(
-                    text = url,
+                    text = candidate.url,
                     style = MaterialTheme.typography.bodyMedium.scaled(),
-                    color = colors.textPrimary,
+                    color = urlColor,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                 )
-                Text(
-                    text = host,
-                    style = MaterialTheme.typography.labelMedium.scaled(),
-                    color = colors.textTertiary,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
+                Row(
                     modifier = Modifier.padding(top = 2.dp),
-                )
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        text = host,
+                        style = MaterialTheme.typography.labelMedium.scaled(),
+                        color = colors.textTertiary,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f, fill = false),
+                    )
+                    when (candidate.status) {
+                        SearchCandidate.Status.TESTING -> {
+                            CircularProgressIndicator(
+                                modifier = Modifier
+                                    .padding(start = 8.dp)
+                                    .size(11.dp),
+                                color = colors.primary,
+                                strokeWidth = 1.5.dp,
+                            )
+                            Text(
+                                text = " 检测中…",
+                                style = MaterialTheme.typography.labelMedium.scaled(),
+                                color = colors.textTertiary,
+                            )
+                        }
+                        SearchCandidate.Status.OK -> {
+                            Text(
+                                text = "✓ ${candidate.detail.orEmpty().ifBlank { "可用" }}",
+                                style = MaterialTheme.typography.labelMedium.scaled(),
+                                color = colors.success,
+                                modifier = Modifier.padding(start = 8.dp),
+                            )
+                        }
+                        SearchCandidate.Status.FAIL -> {
+                            Text(
+                                text = "✗ ${candidate.detail.orEmpty().ifBlank { "不可用" }}",
+                                style = MaterialTheme.typography.labelMedium.scaled(),
+                                color = colors.textHint,
+                                modifier = Modifier.padding(start = 8.dp),
+                            )
+                        }
+                    }
+                }
             }
         }
     }

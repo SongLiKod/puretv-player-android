@@ -937,20 +937,54 @@ class PlaybackEngineImpl @Inject constructor(
         }
     }
 
-    private fun friendlyError(error: PlaybackException): String = when (error.errorCode) {
-        PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_FAILED,
-        PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_TIMEOUT
-        -> "网络连接失败或超时"
+    /** 从异常链提取 HTTP 状态码（OkHttp 抛出 "Response code: 403" 等） */
+    private fun httpCodeOf(error: PlaybackException): String? =
+        generateSequence(error.cause) { it.cause }
+            .mapNotNull { e -> HTTP_CODE_REGEX.find(e.message ?: "")?.groupValues?.get(1) }
+            .firstOrNull()
 
-        PlaybackException.ERROR_CODE_IO_BAD_HTTP_STATUS,
-        PlaybackException.ERROR_CODE_IO_INVALID_HTTP_CONTENT_TYPE
-        -> "播放地址无效或被拒绝"
+    /**
+     * 错误文案（用户反馈：显示英文 "Source error" 看不懂）。
+     * Media3 的 IO/解析类错误 message 常为 "Source error" 等英文占位，
+     * 这里按错误码 + 异常链 HTTP 状态码给出明确中文原因，便于判断是链接失效还是网络问题。
+     */
+    private fun friendlyError(error: PlaybackException): String {
+        val code = httpCodeOf(error)
+        return when (error.errorCode) {
+            PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_FAILED,
+            PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_TIMEOUT,
+            -> "网络连接失败或超时"
 
-        PlaybackException.ERROR_CODE_DECODER_INIT_FAILED,
-        PlaybackException.ERROR_CODE_DECODER_QUERY_FAILED
-        -> "解码器初始化失败"
+            PlaybackException.ERROR_CODE_IO_BAD_HTTP_STATUS,
+            PlaybackException.ERROR_CODE_IO_INVALID_HTTP_CONTENT_TYPE,
+            -> if (code != null) "源站拒绝访问（HTTP $code，多为链接失效或防盗链）" else "播放地址无效或被拒绝"
 
-        else -> error.message ?: "未知错误"
+            PlaybackException.ERROR_CODE_IO_FILE_NOT_FOUND,
+            PlaybackException.ERROR_CODE_IO_NO_PERMISSION,
+            PlaybackException.ERROR_CODE_IO_UNSPECIFIED,
+            -> "播放地址已失效（源站无文件或拒绝访问）"
+
+            PlaybackException.ERROR_CODE_DECODER_INIT_FAILED,
+            PlaybackException.ERROR_CODE_DECODER_QUERY_FAILED,
+            -> "解码器初始化失败"
+
+            PlaybackException.ERROR_CODE_PARSING_MANIFEST_MALFORMED,
+            PlaybackException.ERROR_CODE_PARSING_MANIFEST_UNSUPPORTED,
+            PlaybackException.ERROR_CODE_PARSING_CONTAINER_MALFORMED,
+            PlaybackException.ERROR_CODE_PARSING_CONTAINER_UNSUPPORTED,
+            -> "视频格式无法解析（源文件损坏或格式不支持）"
+
+            else -> when {
+                code != null -> "源站返回 HTTP $code（多为链接失效）"
+                error.errorCodeName.contains("HLS", ignoreCase = true) ->
+                    "视频流加载失败（m3u8 源异常或已失效）"
+                error.errorCodeName.contains("IO", ignoreCase = true) ->
+                    "源站响应异常（链接可能已失效）"
+                else -> error.message
+                    ?.takeIf { it.isNotBlank() && !it.equals("Source error", ignoreCase = true) }
+                    ?: "播放失败"
+            }
+        }
     }
 
     private fun mimeTypeForSubtitle(url: String): String? {
@@ -1163,6 +1197,9 @@ class PlaybackEngineImpl @Inject constructor(
     companion object {
         /** 自动切换备用源后的提示（UI 以 warning 色展示） */
         const val MSG_BACKUP_SWITCHED = "网络波动，已切换备用源"
+
+        /** 异常链里的 HTTP 状态码（OkHttp："Response code: 403"） */
+        private val HTTP_CODE_REGEX = Regex("Response code: (\\d{3})")
 
         /** 全部线路均卡顿后的真正错误（UI 以 error 色展示并提供重试） */
         const val MSG_STALL_ALL_SOURCES = "网络波动持续，已尝试全部线路，请重试"

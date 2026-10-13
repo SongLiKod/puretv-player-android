@@ -357,7 +357,7 @@ fun PlaybackScreen(nav: NavHostController) {
                 episodeLabel = target.label,
                 historyTargetId = target.historyTargetId ?: current.historyTargetId,
                 startPositionMs = target.startPositionMs,
-                backupUrls = emptyList(),
+                backupUrls = target.backups,
             ),
         )
         poke()
@@ -455,7 +455,7 @@ fun PlaybackScreen(nav: NavHostController) {
                 episodeLabel = next.label,
                 historyTargetId = next.historyTargetId ?: current.historyTargetId,
                 startPositionMs = next.startPositionMs,
-                backupUrls = emptyList(),
+                backupUrls = next.backups,
             ),
         )
         autoAdvancedFrom = next.url
@@ -713,7 +713,7 @@ fun PlaybackScreen(nav: NavHostController) {
                             episodeLabel = episode.label,
                             historyTargetId = episode.historyTargetId ?: playingRequest.historyTargetId,
                             startPositionMs = episode.startPositionMs,
-                            backupUrls = emptyList(),
+                            backupUrls = episode.backups,
                         ),
                     )
                     episodeOpen = false

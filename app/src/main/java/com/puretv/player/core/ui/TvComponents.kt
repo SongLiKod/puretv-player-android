@@ -251,6 +251,8 @@ fun TvButton(
             color = contentColor,
             fontSize = 18.sp,
             fontWeight = FontWeight.Medium,
+            maxLines = 1,
+            overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
         )
     }
 }

@@ -5,7 +5,9 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -229,6 +231,24 @@ private fun EpgLine(
                         overflow = TextOverflow.Ellipsis,
                     )
                 }
+            }
+            // 当前节目进度条（电视指南风格：一眼看到这档节目播到哪了）
+            val duration = (current.endAt - current.startAt).coerceAtLeast(1L)
+            val fraction = ((now - current.startAt).toFloat() / duration).coerceIn(0f, 1f)
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(top = 7.dp)
+                    .height(3.dp)
+                    .clip(RoundedCornerShape(2.dp))
+                    .background(colors.divider),
+            ) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth(fraction)
+                        .fillMaxHeight()
+                        .background(colors.primary),
+                )
             }
         }
         next != null -> Text(

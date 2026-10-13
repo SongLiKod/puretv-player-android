@@ -221,17 +221,25 @@ class VodDetailViewModel @Inject constructor(
         selectedSeason.value = season
     }
 
-    /** 电影播放（断点续播起播） */
+    /** 电影播放（断点续播起播；多线路时携带备用线路，主线路失效自动切换） */
     fun playMovie() {
         val current = _item.value ?: return
         val playUrl = current.playUrl ?: return
         viewModelScope.launch {
+            val altRows = try {
+                vodRepository.episodesOnce(sourceId, itemId)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (t: Throwable) {
+                emptyList()
+            }
             playbackEngine.play(
                 PlayerRequests.vod(
                     item = current,
                     playUrl = playUrl,
                     startPositionMs = resumePositionForLabel(null),
                     subtitle = current.category,
+                    backupUrls = PlayerRequests.movieBackups(altRows, playUrl),
                 )
             )
             _playEvents.tryEmit(Unit)

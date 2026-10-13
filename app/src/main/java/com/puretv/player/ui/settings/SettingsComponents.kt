@@ -196,7 +196,14 @@ fun SwitchRow(
         modifier = modifier,
         subtitle = subtitle,
         onClick = if (enabled) ({ onCheckedChange(!checked) }) else null,
-        trailing = { TvSwitch(checked = checked, enabled = enabled) },
+        // 开关自身可点（用户反馈：开关无回调时会吞掉点击，点圆点无效只能点文字/行区域）
+        trailing = {
+            TvSwitch(
+                checked = checked,
+                enabled = enabled,
+                onCheckedChange = if (enabled) ({ onCheckedChange(it) }) else null,
+            )
+        },
     )
 }
 

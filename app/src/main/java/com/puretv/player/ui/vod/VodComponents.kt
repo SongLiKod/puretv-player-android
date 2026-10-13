@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
@@ -27,6 +28,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
+import com.puretv.player.core.theme.LocalPureTvColors
 import com.puretv.player.core.theme.PureTvTheme
 import com.puretv.player.core.ui.TvCard
 import com.puretv.player.core.ui.isPortrait
@@ -92,34 +94,58 @@ fun VodKindTabs(
     }
 }
 
-/** Xtream 分类横滑列表（空列表时自动隐藏） */
+/**
+ * 影视筛选条（用户反馈：分类占了两行 → 合并为一行）：
+ * 品类 Tab（全部/电影/电视剧/综艺/动漫）+ 竖分隔线 + 该品类的分类胶囊，单行横滑。
+ * 「全部」= 品类与分类均不限；点品类自动清分类，点分类不影响品类。
+ */
 @Composable
-fun VodCategoryRow(
+fun VodFilterRow(
+    selectedKind: String?,
+    onKindSelect: (String?) -> Unit,
     categories: List<String>,
-    selected: String?,
-    onSelect: (String?) -> Unit,
+    selectedCategory: String?,
+    onCategorySelect: (String?) -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    if (categories.isEmpty()) return
+    val colors = LocalPureTvColors.current
     LazyRow(
         modifier = modifier,
-        horizontalArrangement = Arrangement.spacedBy(12.dp),
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
         contentPadding = PaddingValues(horizontal = 4.dp),
     ) {
         item {
             VodFilterChip(
-                text = "全部分类",
-                selected = selected == null,
-                onClick = { onSelect(null) },
+                text = "全部",
+                selected = selectedKind == null && selectedCategory == null,
+                onClick = {
+                    onKindSelect(null)
+                    onCategorySelect(null)
+                },
             )
         }
-        items(categories.size) { index ->
-            val category = categories[index]
-            VodFilterChip(
-                text = category,
-                selected = category == selected,
-                onClick = { onSelect(category) },
-            )
+        item { VodFilterChip(text = "电影", selected = selectedKind == "movie", onClick = { onKindSelect("movie") }) }
+        item { VodFilterChip(text = "电视剧", selected = selectedKind == "series", onClick = { onKindSelect("series") }) }
+        item { VodFilterChip(text = "综艺", selected = selectedKind == "variety", onClick = { onKindSelect("variety") }) }
+        item { VodFilterChip(text = "动漫", selected = selectedKind == "anime", onClick = { onKindSelect("anime") }) }
+        if (categories.isNotEmpty()) {
+            item {
+                Box(
+                    modifier = Modifier
+                        .padding(horizontal = 2.dp)
+                        .width(1.dp)
+                        .height(22.dp)
+                        .background(colors.divider),
+                )
+            }
+            items(categories.size) { index ->
+                val category = categories[index]
+                VodFilterChip(
+                    text = category,
+                    selected = category == selectedCategory,
+                    onClick = { onCategorySelect(if (category == selectedCategory) null else category) },
+                )
+            }
         }
     }
 }
@@ -157,6 +183,7 @@ fun VodPosterCard(
     item: VodItemEntity,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
+    sourceName: String? = null,
 ) {
     val colors = PureTvTheme.colors
     TvCard(
@@ -235,6 +262,26 @@ fun VodPosterCard(
                         color = androidx.compose.ui.graphics.Color.White,
                         fontSize = 12.sp,
                     )
+                }
+                // 来源资源库角标（用户反馈：搜索结果要显示来自哪个资源库）
+                if (!sourceName.isNullOrBlank()) {
+                    Box(
+                        modifier = Modifier
+                            .align(Alignment.BottomEnd)
+                            .padding(8.dp)
+                            .clip(RoundedCornerShape(6.dp))
+                            .background(androidx.compose.ui.graphics.Color(0x990B0D14))
+                            .padding(horizontal = 8.dp, vertical = 3.dp),
+                    ) {
+                        Text(
+                            text = sourceName,
+                            color = androidx.compose.ui.graphics.Color.White,
+                            fontSize = 12.sp,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.widthIn(max = 120.dp),
+                        )
+                    }
                 }
                 // 海报底部：评分
                 if (item.rating != null) {

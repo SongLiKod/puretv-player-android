@@ -80,6 +80,7 @@ fun VodScreen(nav: NavHostController) {
     val searchResults by viewModel.searchResults.collectAsStateWithLifecycle()
     val searchScopeAll by viewModel.searchScopeAll.collectAsStateWithLifecycle()
     val onlineSearching by viewModel.onlineSearching.collectAsStateWithLifecycle()
+    val sourceNames by viewModel.sourceNames.collectAsStateWithLifecycle()
     val refreshProgress by viewModel.refreshProgress.collectAsStateWithLifecycle()
     val hasSources by viewModel.hasSources.collectAsStateWithLifecycle()
     val error by viewModel.error.collectAsStateWithLifecycle()
@@ -142,16 +143,13 @@ fun VodScreen(nav: NavHostController) {
                 .fillMaxSize()
                 .padding(horizontal = if (portrait) 16.dp else 40.dp),
         ) {
-            VodKindTabs(
+            VodFilterRow(
                 selectedKind = selectedKind,
-                onSelect = viewModel::selectKind,
-                modifier = Modifier.padding(top = if (portrait) 8.dp else 16.dp),
-            )
-            VodCategoryRow(
+                onKindSelect = viewModel::selectKind,
                 categories = categories,
-                selected = selectedCategory,
-                onSelect = viewModel::selectCategory,
-                modifier = Modifier.padding(top = 12.dp),
+                selectedCategory = selectedCategory,
+                onCategorySelect = viewModel::selectCategory,
+                modifier = Modifier.padding(top = if (portrait) 10.dp else 14.dp),
             )
             // 同步不再占用页面空间（追加需求：不显示加载站点的大块提示）；
             // 同步状态由标题旁的小圈表示，失败时仅一行小字提示。
@@ -179,6 +177,7 @@ fun VodScreen(nav: NavHostController) {
                         onScopeChange = viewModel::setSearchScope,
                         onClear = viewModel::clearSearch,
                         onOpen = { openDetail(nav, it) },
+                        sourceNames = sourceNames,
                     )
 
                     !hasSources && items.isEmpty() && !isRefreshing -> Column(
@@ -256,6 +255,7 @@ private fun SearchResults(
     onScopeChange: (Boolean) -> Unit,
     onClear: () -> Unit,
     onOpen: (VodItemEntity) -> Unit,
+    sourceNames: Map<String, String> = emptyMap(),
 ) {
     val colors = PureTvTheme.colors
     androidx.compose.foundation.layout.Box(modifier = Modifier.fillMaxSize()) {
@@ -269,7 +269,9 @@ private fun SearchResults(
                     color = colors.textSecondary,
                     fontSize = 16.sp,
                 )
-                if (onlineSearching) {
+                // 加载圈只显示一个（用户反馈：此前标题行与结果区各有一个）：
+                // 有结果时标题行小圈提示在线检索继续，结果区不再重复渲染
+                if (onlineSearching && results.isNotEmpty()) {
                     InlineLoading(
                         message = if (scopeAll) {
                             "正在全网搜索 ${results.size} 条结果…"
@@ -324,6 +326,7 @@ private fun SearchResults(
                 VodPosterGrid(
                     items = results,
                     onOpen = onOpen,
+                    sourceNames = sourceNames,
                     modifier = Modifier.padding(top = 12.dp),
                 )
             }
@@ -447,6 +450,7 @@ private fun VodPosterGrid(
     onOpen: (VodItemEntity) -> Unit,
     state: LazyGridState = rememberLazyGridState(),
     modifier: Modifier = Modifier,
+    sourceNames: Map<String, String> = emptyMap(),
 ) {
     val portrait = isPortrait()
     val spacing = if (portrait) 12.dp else 20.dp
@@ -466,7 +470,11 @@ private fun VodPosterGrid(
             key = { index -> "${items[index].sourceId}|${items[index].id}" },
         ) { index ->
             val item = items[index]
-            VodPosterCard(item = item, onClick = { onOpen(item) })
+            VodPosterCard(
+                item = item,
+                onClick = { onOpen(item) },
+                sourceName = sourceNames[item.sourceId],
+            )
         }
     }
 }
