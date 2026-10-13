@@ -53,6 +53,10 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        // Activity 被系统回收后经还原事件拉起：onNewIntent 不回调，初始 intent 里的 action 在此消费
+        if (intent?.action == FloatingPlayerController.ACTION_EXPAND) {
+            floatingPlayerController.markExpandPending()
+        }
         DeviceUtils.applyDeviceOrientation(this)
         enableEdgeToEdge()
         WindowCompat.setDecorFitsSystemWindows(window, false)
@@ -112,10 +116,16 @@ private fun PureTvApp(settings: AppSettings, floatingController: FloatingPlayerC
             }
         }
 
-        // 弹窗悬浮窗「还原」：拉起应用后跳转播放页全屏接管（系统悬浮层自行收起）
+        // 弹窗悬浮窗「还原」：拉起应用后跳转播放页全屏接管（系统悬浮层自行收起）。
+        // expand() 与 onNewIntent 会连续投递两次事件（同帧双重 navigate 会压出瞬时播放页，
+        // 其 onDispose 按「非弹窗」兜底 engine.stop() 清掉播放任务 → 还原后黑屏/无信息/播放键失灵），
+        // 故 launchSingleTop 去重：已在播放页时不再压栈
         LaunchedEffect(navController) {
+            if (floatingController.consumeExpandPending()) {
+                navController.navigate(Routes.PLAYBACK) { launchSingleTop = true }
+            }
             floatingController.expandToPlayer.collect {
-                navController.navigate(Routes.PLAYBACK)
+                navController.navigate(Routes.PLAYBACK) { launchSingleTop = true }
             }
         }
     }

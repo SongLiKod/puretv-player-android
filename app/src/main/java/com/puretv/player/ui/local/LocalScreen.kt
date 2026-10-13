@@ -104,15 +104,15 @@ fun LocalScreen(nav: NavHostController) {
 
     TvScaffold(
         title = "本地影音",
-        subtitle = "播放设备存储与外接存储中的视频文件",
         onBack = { nav.popBackStack() },
         actions = {
             TvTextButton(
                 text = if (gridMode) "切换列表" else "切换网格",
                 onClick = { gridMode = !gridMode },
+                compact = true,
             )
             if (permission == LocalViewModel.PermissionState.GRANTED) {
-                TvTextButton(text = "重新扫描", onClick = { viewModel.scan() })
+                TvTextButton(text = "重新扫描", onClick = { viewModel.scan() }, compact = true)
             }
         },
     ) {

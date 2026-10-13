@@ -81,6 +81,41 @@ class SystemFloatingWindowManager @Inject constructor(
                 if (player != null && player !== attachedPlayer) attachPlayer(c, player)
             }
         }
+        // 弹窗状态自动连播：连播逻辑原生在播放页（LaunchedEffect），弹窗时播放页已退出，
+        // 剧集播完无人切集 → 由本单例接力（与播放页同款守卫：电影/直播/最后一集不动作）。
+        // 页面在前台时（非弹窗）仍由播放页处理，两侧以 isFloating 划界不会双切。
+        scope.launch {
+            var advancedFor: String? = null
+            engine.state.collect { state ->
+                val request = engine.currentRequest.value
+                if (!state.isEnded || request == null) {
+                    advancedFor = null
+                    return@collect
+                }
+                if (!controller.isFloating.value) return@collect
+                if (request.mode == PlaybackMode.LIVE || request.episodes.size <= 1) return@collect
+                // 结束信号与进度互证（切集瞬间 isEnded 可能短暂为 true 的竞态窗口）
+                if (state.durationMs <= 0L || state.positionMs < state.durationMs - 500L) {
+                    return@collect
+                }
+                if (advancedFor == request.url) return@collect
+                val index = request.episodes.indexOfFirst { it.url == request.url }
+                if (index < 0) return@collect
+                val next = request.episodes.getOrNull(index + 1) ?: return@collect
+                advancedFor = request.url
+                engine.play(
+                    request.copy(
+                        url = next.url,
+                        subtitle = next.subtitle ?: next.label,
+                        episodeLabel = next.label,
+                        historyTargetId = next.historyTargetId ?: request.historyTargetId,
+                        startPositionMs = next.startPositionMs,
+                        backupUrls = next.backups,
+                    ),
+                )
+                advancedFor = next.url
+            }
+        }
     }
 
     /** 显示悬浮窗（需已授权且内核已创建播放器，否则返回 false） */

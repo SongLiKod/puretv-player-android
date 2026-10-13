@@ -300,7 +300,7 @@ fun TvSwitch(
     }
 }
 
-/** 次级文字按钮（带统一焦点高亮） */
+/** 次级文字按钮（带统一焦点高亮；compact = 小尺寸，页头动作区用） */
 @Composable
 fun TvTextButton(
     text: String,
@@ -308,6 +308,7 @@ fun TvTextButton(
     modifier: Modifier = Modifier,
     enabled: Boolean = true,
     color: Color? = null,
+    compact: Boolean = false,
 ) {
     val colors = LocalPureTvColors.current
     val config = LocalTvUiConfig.current
@@ -328,7 +329,7 @@ fun TvTextButton(
             pressed && focused -> colors.focusPressed
             else -> color ?: colors.textSecondary
         },
-        fontSize = 16.sp,
+        fontSize = if (compact) 13.sp else 16.sp,
         modifier = modifier
             .clip(shape)
             .background(if (focused && highlightBorder) colors.card else Color.Transparent)
@@ -340,7 +341,7 @@ fun TvTextButton(
             .clickable(interactionSource = interactionSource, indication = null, enabled = enabled, onClick = onClick)
             .onFocusChanged { focused = it.isFocused }
             .focusable(enabled = enabled)
-            .padding(horizontal = 16.dp, vertical = 8.dp),
+            .padding(horizontal = if (compact) 10.dp else 16.dp, vertical = if (compact) 5.dp else 8.dp),
     )
 }
 

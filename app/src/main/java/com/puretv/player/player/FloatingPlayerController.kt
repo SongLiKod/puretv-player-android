@@ -29,6 +29,9 @@ class FloatingPlayerController @Inject constructor() {
     /** 悬浮窗权限申请中标记（点了弹窗按钮但尚未授权，返回应用后继续弹窗流程） */
     private val _permissionPending = MutableStateFlow(false)
 
+    /** 还原事件待消费标记（Activity 被回收后重建时 onNewIntent 不回调，需在 onCreate 标记） */
+    private val _expandPending = MutableStateFlow(false)
+
     fun enter() {
         _isFloating.value = true
     }
@@ -39,6 +42,16 @@ class FloatingPlayerController @Inject constructor() {
 
     fun requestExpandToPlayer() {
         _expandToPlayer.tryEmit(Unit)
+    }
+
+    fun markExpandPending() {
+        _expandPending.value = true
+    }
+
+    fun consumeExpandPending(): Boolean {
+        val pending = _expandPending.value
+        _expandPending.value = false
+        return pending
     }
 
     fun markPermissionPending() {
