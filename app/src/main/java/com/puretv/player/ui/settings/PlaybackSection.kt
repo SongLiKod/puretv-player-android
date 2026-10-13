@@ -97,6 +97,30 @@ fun PlaybackSection(
             )
         }
 
+        // 跳过片头片尾：由插件「跳过片头片尾」（播放增强类）提供，卸载插件即隐藏并还原为关闭
+        val skipPlugin by viewModel.playbackEnhanceInstalled.collectAsStateWithLifecycle()
+        if (skipPlugin) {
+            SettingGroup(
+                title = "跳过片头片尾",
+                subtitle = "点播每集自动执行；片头过短的内容不跳，0=关闭（5.6 易用性）",
+            ) {
+                OptionSelectorRow(
+                    title = "跳过片头",
+                    subtitle = "本集开始自动跳过片头曲（如 60 秒），回看片头不再打断",
+                    options = skipIntroOptions(),
+                    selectedKey = current.skipIntroSec.toString(),
+                    onSelect = { key -> viewModel.setSkipIntro(key.toInt()) },
+                )
+                OptionSelectorRow(
+                    title = "跳过片尾",
+                    subtitle = "剩余时长进入片尾：有下一集直接连播，电影/最后一集跳到结尾",
+                    options = skipOutroOptions(),
+                    selectedKey = current.skipOutroSec.toString(),
+                    onSelect = { key -> viewModel.setSkipOutro(key.toInt()) },
+                )
+            }
+        }
+
         SettingGroup(title = "存储与缓存", subtitle = "缓存超限自动淘汰最久未用内容；换集自动回收上一集") {
             OptionSelectorRow(
                 title = "缓存上限",
@@ -176,6 +200,25 @@ private fun countdownOptions(): List<Pair<String, String>> = listOf(
     "10" to "10 秒",
     "15" to "15 秒",
     "30" to "30 秒",
+)
+
+/** 跳过片头档位（秒；0=关闭） */
+private fun skipIntroOptions(): List<Pair<String, String>> = listOf(
+    "0" to "关闭",
+    "15" to "15 秒",
+    "30" to "30 秒",
+    "45" to "45 秒",
+    "60" to "60 秒",
+    "90" to "90 秒",
+)
+
+/** 跳过片尾档位（秒；0=关闭） */
+private fun skipOutroOptions(): List<Pair<String, String>> = listOf(
+    "0" to "关闭",
+    "10" to "10 秒",
+    "20" to "20 秒",
+    "30" to "30 秒",
+    "60" to "60 秒",
 )
 
 /** 播放缓存上限档位（MB；默认 4GB） */

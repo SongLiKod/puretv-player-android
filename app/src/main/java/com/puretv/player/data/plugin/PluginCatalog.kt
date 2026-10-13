@@ -30,18 +30,20 @@ data class PluginEntryDto(
     val sha256: String = "",
 )
 
-/** 插件类型常量（需求 5.7.1：字幕插件、资源插件、美化插件） */
+/** 插件类型常量（需求 5.7.1：字幕插件、资源插件、美化插件；追加：播放增强插件） */
 object PluginType {
     const val SUBTITLE = "subtitle"
     const val SOURCE = "source"
     const val SKIN = "skin"
+    const val PLAYBACK = "playback"
 
-    val ALL = listOf(SUBTITLE, SOURCE, SKIN)
+    val ALL = listOf(SUBTITLE, SOURCE, SKIN, PLAYBACK)
 
     fun label(type: String): String = when (type) {
         SUBTITLE -> "字幕增强"
         SOURCE -> "资源聚合"
         SKIN -> "界面美化"
+        PLAYBACK -> "播放增强"
         else -> "其他"
     }
 }

@@ -27,10 +27,12 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import javax.inject.Inject
+import kotlin.math.abs
 
 /** 耗时操作进度（导入/备份/恢复/同步） */
 data class ProgressUi(
@@ -102,11 +104,33 @@ class SettingsViewModel @Inject constructor(
     fun setLayoutDensity(density: LayoutDensity) =
         launchSettings { settingsRepository.setLayoutDensity(density) }
 
-    /** 自定义皮肤：仅主色/高亮色两项；皮肤插件安装后对应预设才可选 */
+    /** 自定义皮肤：仅主色/高亮色两项；皮肤插件安装后对应预设才可选。带字号皮肤（长辈模式）联动字号 */
     fun applySkin(preset: SkinPreset) = launchSettings {
+        val before = settingsRepository.settings.first()
         val json = if (preset.isDefault) null else preset.toJson()
         settingsRepository.setSkin(preset.id, json)
+        // 字号联动：目标皮肤托管字号 → 应用；离开带字号皮肤且字号仍为皮肤所设 → 还原标准
+        val scale = preset.fontScale
+        if (scale != null) {
+            settingsRepository.setFontScale(scale)
+        } else {
+            val prevScale = SkinPreset.ALL.firstOrNull { it.id == before.skinId }?.fontScale
+            if (prevScale != null && abs(before.fontScale - prevScale) < 0.01f) {
+                settingsRepository.setFontScale(1.0f)
+            }
+        }
     }
+
+    /* ----------------------------- 跳过片头片尾（插件 playback_skip） ----------------------------- */
+
+    fun setSkipIntro(sec: Int) = launchSettings { settingsRepository.setSkipIntroSec(sec) }
+
+    fun setSkipOutro(sec: Int) = launchSettings { settingsRepository.setSkipOutroSec(sec) }
+
+    /** 插件「跳过片头片尾」安装启用后，播放设置开放片头/片尾跳过配置 */
+    val playbackEnhanceInstalled: StateFlow<Boolean> = pluginManager.observeCatalog()
+        .map { list -> list.any { it.id == "playback_skip" && it.installed && it.enabled } }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), false)
 
     /* ----------------------------- 播放（5.5 / 5.4） ----------------------------- */
 

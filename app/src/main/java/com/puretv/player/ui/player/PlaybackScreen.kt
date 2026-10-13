@@ -220,6 +220,11 @@ class PlaybackViewModel @Inject constructor(
         .map { it.miniProgressEnabled }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), true)
 
+    /** 跳过片头片尾配置（秒，0=关闭；插件「跳过片头片尾」安装后可配） */
+    val skipConfig: StateFlow<SkipConfig> = settingsRepository.settings
+        .map { SkipConfig(it.skipIntroSec, it.skipOutroSec) }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), SkipConfig(0, 0))
+
     private val _currentProgram = MutableStateFlow<EpgProgramEntity?>(null)
     val currentProgram: StateFlow<EpgProgramEntity?> = _currentProgram.asStateFlow()
 
@@ -262,6 +267,9 @@ private const val SEEK_STEP_MS = 10_000L
 private const val CONTROLS_HIDE_MS = 3_000L
 private const val DRAWER_AUTO_CLOSE_MS = 2_000L
 
+/** 跳过片头片尾配置（秒，0=关闭；插件「跳过片头片尾」） */
+data class SkipConfig(val introSec: Int, val outroSec: Int)
+
 private enum class PlaybackMenu { SPEED, SUBTITLE, AUDIO, ASPECT, BACKUP }
 
 private data class OptionItem(val label: String, val selected: Boolean = false)
@@ -280,6 +288,7 @@ fun PlaybackScreen(nav: NavHostController) {
     val preloadProgress by engine.preloadProgress.collectAsStateWithLifecycle()
     val nextEpisodeCountdown by viewModel.nextEpisodeCountdownSec.collectAsStateWithLifecycle()
     val miniProgressEnabled by viewModel.miniProgressEnabled.collectAsStateWithLifecycle()
+    val skipConfig by viewModel.skipConfig.collectAsStateWithLifecycle()
     val channels by viewModel.channels.collectAsStateWithLifecycle()
     val favoriteKeys by viewModel.favoriteKeys.collectAsStateWithLifecycle()
     val currentProgram by viewModel.currentProgram.collectAsStateWithLifecycle()
@@ -417,6 +426,44 @@ fun PlaybackScreen(nav: NavHostController) {
             ),
         )
         poke()
+    }
+
+    /* ---- 跳过片头片尾（插件「跳过片头片尾」；每集各触发一次，回看不打断） ---- */
+    val introSec = skipConfig.introSec
+    val outroSec = skipConfig.outroSec
+    var introSkippedFor by remember { mutableStateOf<String?>(null) }
+    var outroHandledFor by remember { mutableStateOf<String?>(null) }
+
+    // 片头：本集开始且进度落在片头窗口内 → 自动跳到片头结束（时长过短不跳防误伤正片）
+    LaunchedEffect(request?.url, state.positionMs, state.durationMs, introSec) {
+        val current = request ?: return@LaunchedEffect
+        if (introSec <= 0 || current.mode != PlaybackMode.VOD) return@LaunchedEffect
+        if (introSkippedFor == current.url) return@LaunchedEffect
+        val introMs = introSec * 1000L
+        if (state.durationMs <= introMs * 2) return@LaunchedEffect
+        if (state.positionMs < introMs) {
+            introSkippedFor = current.url
+            engine.seekTo(introMs)
+        }
+    }
+
+    // 片尾：剩余时长进入片尾窗口 → 有下一集直接连播；电影/最后一集跳到结尾自然收束
+    LaunchedEffect(request?.url, state.positionMs, state.durationMs, outroSec) {
+        val current = request ?: return@LaunchedEffect
+        if (outroSec <= 0 || current.mode != PlaybackMode.VOD) return@LaunchedEffect
+        if (outroHandledFor == current.url) return@LaunchedEffect
+        val outroMs = outroSec * 1000L
+        val duration = state.durationMs
+        if (duration <= outroMs * 2) return@LaunchedEffect
+        if (duration - state.positionMs > outroMs) return@LaunchedEffect
+        val index = current.episodes.indexOfFirst { it.url == current.url }
+        if (index < 0) return@LaunchedEffect
+        outroHandledFor = current.url
+        if (index + 1 < current.episodes.size) {
+            stepEpisode(1)
+        } else {
+            engine.seekTo(duration)
+        }
     }
 
     /** 连播倒计时：本集剩余 ≤ 设置秒数时显示「N 秒后播放下一集」（电影/直播/最后一集不提示） */

@@ -21,6 +21,8 @@ data class SkinPreset(
     val isDefault: Boolean = false,
     /** 内置皮肤（常驻设置列表）；false = 皮肤插件，安装后才在设置出现、卸载即消失 */
     val builtIn: Boolean = false,
+    /** 皮肤托管字号（如长辈模式 1.3）：应用该皮肤时联动写入字体缩放，换回无字号皮肤时还原 1.0 */
+    val fontScale: Float? = null,
 ) {
     /** 序列化为应用层皮肤 JSON（{"accent":"#RRGGBB","highlight":"#RRGGBB"}） */
     fun toJson(): String = JSONObject()
@@ -109,21 +111,67 @@ data class SkinPreset(
             highlight = 0xFB7185,
         )
 
-        val ALL = listOf(
-            DEFAULT, DEEP_BLUE, NAVY, STEEL, TEAL, EMERALD, VIOLET, AMBER, ROSE,
+        // —— 第二批皮肤插件（插件市场「界面美化」上架）——
+
+        val MONO = SkinPreset(
+            id = "skin_mono",
+            name = "无彩银灰",
+            description = "单色银灰主色，极简纯净，纯黑背景更沉浸",
+            accent = 0x64748B,
+            highlight = 0x94A3B8,
         )
 
-        /** 由当前设置反查所选预设 */
+        val MIST = SkinPreset(
+            id = "skin_mist",
+            name = "晨雾蓝",
+            description = "晨雾浅蓝，轻盈通透，白天观感清爽",
+            accent = 0x0EA5E9,
+            highlight = 0x7DD3FC,
+        )
+
+        val GOLD = SkinPreset(
+            id = "skin_gold",
+            name = "鎏金",
+            description = "鎏金暖色，低调华贵，暗色界面更显档次",
+            accent = 0xA16207,
+            highlight = 0xEAB308,
+        )
+
+        val CRIMSON = SkinPreset(
+            id = "skin_crimson",
+            name = "朱砂",
+            description = "朱砂正红，热烈醒目，焦点定位一眼可见",
+            accent = 0xDC2626,
+            highlight = 0xF87171,
+        )
+
+        /** 长辈模式：高对比主色 + 字号联动 130%（安装/启用即放大字号，卸载还原） */
+        val ELDER = SkinPreset(
+            id = "skin_elder",
+            name = "长辈大字",
+            description = "高对比主色并放大字号至 130%，长辈易读",
+            accent = 0x2563EB,
+            highlight = 0x60A5FA,
+            fontScale = 1.3f,
+        )
+
+        val ALL = listOf(
+            DEFAULT, DEEP_BLUE, NAVY, STEEL, TEAL, EMERALD, VIOLET, AMBER, ROSE,
+            MONO, MIST, GOLD, CRIMSON, ELDER,
+        )
+
+        /** 由当前设置反查所选预设（skinId 优先——长辈/深蓝等同配色以 id 为准，色值匹配仅兜底） */
         fun from(settings: AppSettings): SkinPreset {
+            ALL.firstOrNull { it.id == settings.skinId }?.let { return it }
             val custom = settings.customSkinJson
-            if (custom.isNullOrBlank()) return ALL.firstOrNull { it.id == settings.skinId } ?: DEFAULT
+            if (custom.isNullOrBlank()) return DEFAULT
             val preset = runCatching {
                 val obj = JSONObject(custom)
                 val accent = parseHex(obj.optString("accent"))
                 val highlight = parseHex(obj.optString("highlight"))
                 ALL.firstOrNull { it.accent == accent && it.highlight == highlight }
             }.getOrNull()
-            return preset ?: ALL.firstOrNull { it.id == settings.skinId } ?: DEFAULT
+            return preset ?: DEFAULT
         }
 
         private fun parseHex(value: String?): Long? {

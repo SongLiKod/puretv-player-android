@@ -19,11 +19,13 @@ import androidx.media3.common.Player
 import androidx.media3.ui.AspectRatioFrameLayout
 import androidx.media3.ui.PlayerView
 import com.puretv.player.MainActivity
+import com.puretv.player.data.prefs.SettingsRepository
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.launch
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -44,6 +46,7 @@ class SystemFloatingWindowManager @Inject constructor(
     @ApplicationContext private val context: Context,
     private val engine: PlaybackEngine,
     private val controller: FloatingPlayerController,
+    private val settingsRepository: SettingsRepository,
 ) {
 
     private val windowManager =
@@ -99,23 +102,64 @@ class SystemFloatingWindowManager @Inject constructor(
                     return@collect
                 }
                 if (advancedFor == request.url) return@collect
-                val index = request.episodes.indexOfFirst { it.url == request.url }
-                if (index < 0) return@collect
-                val next = request.episodes.getOrNull(index + 1) ?: return@collect
+                val next = nextEpisodeRequest(request) ?: return@collect
                 advancedFor = request.url
-                engine.play(
-                    request.copy(
-                        url = next.url,
-                        subtitle = next.subtitle ?: next.label,
-                        episodeLabel = next.label,
-                        historyTargetId = next.historyTargetId ?: request.historyTargetId,
-                        startPositionMs = next.startPositionMs,
-                        backupUrls = next.backups,
-                    ),
-                )
+                engine.play(next)
                 advancedFor = next.url
             }
         }
+        // 弹窗状态跳过片头片尾（插件「跳过片头片尾」；与播放页同款配置与守卫）。
+        // 以 isFloating 划界：弹窗时由这里执行，页面在前台时由播放页执行，不会双跳。
+        scope.launch {
+            var introSkippedFor: String? = null
+            var outroHandledFor: String? = null
+            combine(engine.state, engine.currentRequest, settingsRepository.settings) { s, r, cfg ->
+                Triple(s, r, cfg)
+            }.collect { (state, request, cfg) ->
+                if (request == null || !controller.isFloating.value) return@collect
+                if (request.mode != PlaybackMode.VOD || state.isEnded) return@collect
+                if (cfg.skipIntroSec > 0) {
+                    val introMs = cfg.skipIntroSec * 1000L
+                    if (introSkippedFor != request.url &&
+                        state.durationMs > introMs * 2 &&
+                        state.positionMs >= 0L &&
+                        state.positionMs < introMs
+                    ) {
+                        introSkippedFor = request.url
+                        engine.seekTo(introMs)
+                    }
+                }
+                if (cfg.skipOutroSec > 0) {
+                    val outroMs = cfg.skipOutroSec * 1000L
+                    val duration = state.durationMs
+                    val remaining = duration - state.positionMs
+                    if (outroHandledFor != request.url &&
+                        duration > outroMs * 2 &&
+                        remaining >= 0L &&
+                        remaining <= outroMs
+                    ) {
+                        outroHandledFor = request.url
+                        val next = nextEpisodeRequest(request)
+                        if (next != null) engine.play(next) else engine.seekTo(duration)
+                    }
+                }
+            }
+        }
+    }
+
+    /** 构造下一集播放请求（找不到当前集 / 已是最后一集返回 null，切集与片尾跳过共用） */
+    private fun nextEpisodeRequest(request: PlaybackRequest): PlaybackRequest? {
+        val index = request.episodes.indexOfFirst { it.url == request.url }
+        if (index < 0) return null
+        val next = request.episodes.getOrNull(index + 1) ?: return null
+        return request.copy(
+            url = next.url,
+            subtitle = next.subtitle ?: next.label,
+            episodeLabel = next.label,
+            historyTargetId = next.historyTargetId ?: request.historyTargetId,
+            startPositionMs = next.startPositionMs,
+            backupUrls = next.backups,
+        )
     }
 
     /** 显示悬浮窗（需已授权且内核已创建播放器，否则返回 false） */

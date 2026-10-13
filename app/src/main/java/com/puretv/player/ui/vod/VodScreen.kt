@@ -17,8 +17,11 @@ import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyGridState
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.rememberLazyGridState
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Leaderboard
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.CircularProgressIndicator
@@ -36,8 +39,10 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
@@ -84,13 +89,18 @@ fun VodScreen(nav: NavHostController) {
     val refreshProgress by viewModel.refreshProgress.collectAsStateWithLifecycle()
     val hasSources by viewModel.hasSources.collectAsStateWithLifecycle()
     val error by viewModel.error.collectAsStateWithLifecycle()
+    val chartEnabled by viewModel.chartEnabled.collectAsStateWithLifecycle()
+    val charts by viewModel.charts.collectAsStateWithLifecycle()
 
     var showSearchDialog by remember { mutableStateOf(false) }
+    // 榜单订阅（资源插件 source_chart）：安装启用后标题栏开放榜单入口
+    var showCharts by remember { mutableStateOf(false) }
 
     val isRefreshing = refreshProgress != null
     val syncMessage = error
         ?: refreshProgress?.takeIf { it.stage == ImportProgress.Stage.FAILED }?.message
     val searchActive = !searchQuery.isNullOrBlank()
+    val chartActive = showCharts && !searchActive
 
     val portrait = isPortrait()
 
@@ -109,7 +119,22 @@ fun VodScreen(nav: NavHostController) {
         title = "影视点播",
         showBack = false,
         actions = {
-            // 标题后的小图标操作：搜索 / 刷新（刷新中显示小圈，点按取消同步）
+            // 标题后的小图标操作：榜单（插件）/ 搜索 / 刷新（刷新中显示小圈，点按取消同步）
+            if (chartEnabled) {
+                IconButton(
+                    onClick = {
+                        showCharts = !showCharts
+                        if (showCharts) viewModel.clearSearch()
+                    },
+                ) {
+                    Icon(
+                        imageVector = Icons.Filled.Leaderboard,
+                        contentDescription = "榜单",
+                        tint = if (showCharts) colors.primary else colors.textSecondary,
+                        modifier = Modifier.size(22.dp),
+                    )
+                }
+            }
             IconButton(onClick = { showSearchDialog = true }) {
                 Icon(
                     imageVector = Icons.Filled.Search,
@@ -180,6 +205,15 @@ fun VodScreen(nav: NavHostController) {
                         sourceNames = sourceNames,
                     )
 
+                    // 榜单订阅面板（资源插件 source_chart 安装启用后可见）
+                    chartActive -> ChartList(
+                        charts = charts,
+                        onOpen = {
+                            showCharts = false
+                            openDetail(nav, it)
+                        },
+                    )
+
                     !hasSources && items.isEmpty() && !isRefreshing -> Column(
                         horizontalAlignment = Alignment.CenterHorizontally,
                         modifier = Modifier.fillMaxSize(),
@@ -243,6 +277,129 @@ fun VodScreen(nav: NavHostController) {
 
 private fun openDetail(nav: NavHostController, item: VodItemEntity) {
     nav.navigate(Routes.vodDetail(item.sourceId, item.id))
+}
+
+/**
+ * 榜单面板（资源插件「榜单订阅」）：热播更新 / 高分口碑两榜，
+ * 聚合本地片库缓存（随同步与刮削回填实时联动），点按进详情页。
+ */
+@Composable
+private fun ChartList(
+    charts: ChartLists,
+    onOpen: (VodItemEntity) -> Unit,
+) {
+    val colors = PureTvTheme.colors
+    var topMode by remember { mutableStateOf(false) }
+    val list = if (topMode) charts.top else charts.hot
+    Column(modifier = Modifier.fillMaxSize()) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            ChartTab(text = "热播更新", selected = !topMode, onClick = { topMode = false })
+            ChartTab(text = "高分口碑", selected = topMode, onClick = { topMode = true })
+        }
+        if (list.isEmpty()) {
+            EmptyState(
+                text = "榜单暂无数据",
+                subtext = "同步影视资源后自动聚合榜单",
+                modifier = Modifier.padding(top = 48.dp),
+            )
+        } else {
+            LazyColumn(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(top = 12.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                itemsIndexed(list) { index, item ->
+                    ChartRow(rank = index + 1, item = item, onClick = { onOpen(item) })
+                }
+            }
+        }
+    }
+}
+
+/** 榜单切换胶囊（热播更新 / 高分口碑） */
+@Composable
+private fun ChartTab(text: String, selected: Boolean, onClick: () -> Unit) {
+    val colors = PureTvTheme.colors
+    Text(
+        text = text,
+        color = if (selected) Color.White else colors.textSecondary,
+        fontSize = 14.sp,
+        modifier = Modifier
+            .clip(RoundedCornerShape(50))
+            .background(if (selected) colors.primary else colors.card)
+            .border(
+                width = 1.dp,
+                color = if (selected) colors.primary else colors.divider,
+                shape = RoundedCornerShape(50),
+            )
+            .clickable(onClick = onClick)
+            .padding(horizontal = 16.dp, vertical = 7.dp),
+    )
+}
+
+/** 榜单条目行：名次 + 标题 + 年份·分类 + 评分 */
+@Composable
+private fun ChartRow(rank: Int, item: VodItemEntity, onClick: () -> Unit) {
+    val colors = PureTvTheme.colors
+    val rankColor = when (rank) {
+        1 -> Color(0xFFF59E0B)
+        2 -> Color(0xFF94A3B8)
+        3 -> Color(0xFFD97706)
+        else -> colors.textTertiary
+    }
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(10.dp))
+            .background(colors.card)
+            .clickable(onClick = onClick)
+            .padding(horizontal = 14.dp, vertical = 12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            text = "$rank",
+            color = rankColor,
+            fontSize = 16.sp,
+            fontWeight = FontWeight.Bold,
+            modifier = Modifier.width(32.dp),
+        )
+        Column(
+            modifier = Modifier
+                .weight(1f)
+                .padding(start = 4.dp),
+        ) {
+            Text(
+                text = item.title,
+                color = colors.textPrimary,
+                fontSize = 15.sp,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            val meta = listOfNotNull(item.year, item.category).joinToString(" · ")
+            if (meta.isNotEmpty()) {
+                Text(
+                    text = meta,
+                    color = colors.textTertiary,
+                    fontSize = 12.sp,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.padding(top = 2.dp),
+                )
+            }
+        }
+        item.rating?.let { rating ->
+            Text(
+                text = String.format(java.util.Locale.US, "%.1f", rating),
+                color = colors.highlight,
+                fontSize = 14.sp,
+                fontWeight = FontWeight.SemiBold,
+            )
+        }
+    }
 }
 
 /** 搜索结果区（含「本站 / 全网」搜索范围切换，追加需求） */

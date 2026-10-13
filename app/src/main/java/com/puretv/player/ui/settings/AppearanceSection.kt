@@ -117,7 +117,7 @@ fun AppearanceSection(
             SettingGroup(title = "拓展能力") {
                 SettingRow(
                     title = "插件市场",
-                    subtitle = "字幕增强 · 资源聚合 · 界面美化（官方审核上架）",
+                    subtitle = "字幕增强 · 资源聚合 · 界面美化 · 播放增强（官方审核上架）",
                     value = "进入",
                     onClick = onOpenPlugins,
                 )

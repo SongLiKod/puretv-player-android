@@ -5,6 +5,7 @@ import androidx.lifecycle.viewModelScope
 import com.puretv.player.data.local.entity.VodItemEntity
 import com.puretv.player.data.model.ImportProgress
 import com.puretv.player.data.prefs.SettingsRepository
+import com.puretv.player.data.plugin.PluginManager
 import com.puretv.player.data.source.SelectedSourceStore
 import com.puretv.player.data.vod.VodRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -25,6 +26,19 @@ import kotlinx.coroutines.launch
 import javax.inject.Inject
 
 /**
+ * 榜单数据（资源插件「榜单订阅」）：
+ * [hot] 热播榜（最近更新 Top50）、[top] 高分榜（评分 Top50，无评分不入榜）。
+ */
+data class ChartLists(
+    val hot: List<VodItemEntity> = emptyList(),
+    val top: List<VodItemEntity> = emptyList(),
+) {
+    companion object {
+        val EMPTY = ChartLists()
+    }
+}
+
+/**
  * 影视点播列表 VM（需求 5.4.1 全品类聚合 / 5.4.3 智能追更后台同步 / 6 流畅度）。
  * 列表数据全部来自 Room 缓存 Flow，网络刷新只更新缓存，UI 不卡死。
  */
@@ -34,6 +48,7 @@ class VodViewModel @Inject constructor(
     private val vodRepository: VodRepository,
     private val selectedSourceStore: SelectedSourceStore,
     private val settingsRepository: SettingsRepository,
+    private val pluginManager: PluginManager,
 ) : ViewModel() {
 
     /** 当前品类 Tab（null = 全部） */
@@ -94,6 +109,38 @@ class VodViewModel @Inject constructor(
                 list.filter { item -> item.playUrl == null || item.playUrl !in broken }
             }
             .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+
+    /* ----------------------------- 榜单订阅（资源插件 source_chart） ----------------------------- */
+
+    /** 榜单订阅插件安装启用后，影视页开放榜单入口（卸载/禁用即消失） */
+    val chartEnabled: StateFlow<Boolean> = pluginManager.observeCatalog()
+        .map { list -> list.any { it.id == "source_chart" && it.installed && it.enabled } }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), false)
+
+    /**
+     * 榜单数据（本地片库全量聚合，随同步/刮削实时联动）：
+     * 热播榜 = 最近更新优先；高分榜 = 评分优先（无评分条目不入榜）。
+     */
+    val charts: StateFlow<ChartLists> = chartEnabled
+        .flatMapLatest { enabled ->
+            if (!enabled) {
+                flowOf(ChartLists.EMPTY)
+            } else {
+                vodRepository.observeItems(kind = null, category = null)
+                    .combine(settingsRepository.brokenPlayUrls) { list, broken ->
+                        list.filter { item -> item.playUrl == null || item.playUrl !in broken }
+                    }
+                    .map { list ->
+                        ChartLists(
+                            hot = list.sortedByDescending { it.updatedAt }.take(50),
+                            top = list.filter { (it.rating ?: 0.0) > 0.0 }
+                                .sortedByDescending { it.rating ?: 0.0 }
+                                .take(50),
+                        )
+                    }
+            }
+        }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), ChartLists.EMPTY)
 
     /** 在线搜索进行中（UI 显示「正在全网搜索…」） */
     private val _onlineSearching = MutableStateFlow(false)

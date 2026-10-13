@@ -75,6 +75,10 @@ data class AppSettings(
     val preloadMinutes: Int = 0,
     /** 连播倒计时（秒，0=关闭）：本集结束前提示「N 秒后播放下一集」 */
     val nextEpisodeCountdownSec: Int = 5,
+    /** 跳过片头（秒，0=关闭）：插件「跳过片头片尾」安装后可配，每集开始自动跳过片头 */
+    val skipIntroSec: Int = 0,
+    /** 跳过片尾（秒，0=关闭）：剩余时长进入片尾窗口直达下一集/结尾 */
+    val skipOutroSec: Int = 0,
     /** 播放媒体缓存磁盘上限（MB，512..8192；默认 4GB，重启应用生效） */
     val cacheMaxMb: Int = 4096,
     /** 全屏播放底部迷你进度条（常驻细条，直播不显示；默认开） */
@@ -167,6 +171,14 @@ class SettingsRepository @Inject constructor(
         it[KEY_NEXT_EP_COUNTDOWN] = sec.coerceIn(0, 30)
     }
 
+    suspend fun setSkipIntroSec(sec: Int) = edit {
+        it[KEY_SKIP_INTRO_SEC] = sec.coerceIn(0, 120)
+    }
+
+    suspend fun setSkipOutroSec(sec: Int) = edit {
+        it[KEY_SKIP_OUTRO_SEC] = sec.coerceIn(0, 120)
+    }
+
     suspend fun setCacheMaxMb(mb: Int) = edit {
         it[KEY_CACHE_MAX_MB] = mb.coerceIn(512, 8192)
     }
@@ -257,6 +269,8 @@ class SettingsRepository @Inject constructor(
         prefs[KEY_DEFAULT_SPEED] = s.defaultSpeed
         prefs[KEY_PRELOAD_MINUTES] = s.preloadMinutes
         prefs[KEY_NEXT_EP_COUNTDOWN] = s.nextEpisodeCountdownSec
+        prefs[KEY_SKIP_INTRO_SEC] = s.skipIntroSec
+        prefs[KEY_SKIP_OUTRO_SEC] = s.skipOutroSec
         prefs[KEY_CACHE_MAX_MB] = s.cacheMaxMb
         prefs[KEY_MINI_PROGRESS] = s.miniProgressEnabled
         prefs[KEY_TMDB_KEY] = s.tmdbApiKey
@@ -297,6 +311,8 @@ class SettingsRepository @Inject constructor(
         defaultSpeed = this[KEY_DEFAULT_SPEED] ?: 1.0f,
         preloadMinutes = this[KEY_PRELOAD_MINUTES] ?: 0,
         nextEpisodeCountdownSec = this[KEY_NEXT_EP_COUNTDOWN] ?: 5,
+        skipIntroSec = this[KEY_SKIP_INTRO_SEC] ?: 0,
+        skipOutroSec = this[KEY_SKIP_OUTRO_SEC] ?: 0,
         cacheMaxMb = this[KEY_CACHE_MAX_MB] ?: 4096,
         miniProgressEnabled = this[KEY_MINI_PROGRESS] ?: true,
         tmdbApiKey = this[KEY_TMDB_KEY] ?: "",
@@ -333,6 +349,8 @@ class SettingsRepository @Inject constructor(
         private val KEY_DEFAULT_SPEED = floatPreferencesKey("default_speed")
         private val KEY_PRELOAD_MINUTES = intPreferencesKey("preload_minutes")
         private val KEY_NEXT_EP_COUNTDOWN = intPreferencesKey("next_ep_countdown_sec")
+        private val KEY_SKIP_INTRO_SEC = intPreferencesKey("skip_intro_sec")
+        private val KEY_SKIP_OUTRO_SEC = intPreferencesKey("skip_outro_sec")
         private val KEY_CACHE_MAX_MB = intPreferencesKey("cache_max_mb")
         private val KEY_MINI_PROGRESS = booleanPreferencesKey("mini_progress_enabled")
         private val KEY_BROKEN_URLS = stringSetPreferencesKey("broken_play_urls")

@@ -16,6 +16,7 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import javax.inject.Inject
+import kotlin.math.abs
 
 /** 单个插件的安装进度 */
 data class PluginInstallUi(
@@ -91,6 +92,16 @@ class PluginsViewModel @Inject constructor(
                 // 皮肤插件卸载：若正使用该皮肤，自动恢复默认主题（设置列表同步移除该选项）
                 val current = settingsRepository.settings.first()
                 if (current.skinId == id) settingsRepository.setSkin("default", null)
+                // 字号由皮肤托管（长辈模式）时，卸载还原标准字号
+                val presetScale = SkinPreset.ALL.firstOrNull { it.id == id }?.fontScale
+                if (presetScale != null && abs(current.fontScale - presetScale) < 0.01f) {
+                    settingsRepository.setFontScale(1.0f)
+                }
+                // 播放增强插件卸载：跳过片头片尾配置随插件还原关闭
+                if (id == "playback_skip") {
+                    settingsRepository.setSkipIntroSec(0)
+                    settingsRepository.setSkipOutroSec(0)
+                }
                 _notice.value = "已卸载：$name"
             } catch (e: kotlinx.coroutines.CancellationException) {
                 throw e
@@ -116,6 +127,7 @@ class PluginsViewModel @Inject constructor(
     /**
      * 皮肤插件安装/启用即真实换肤：条目 id 与 [SkinPreset] 预设 id 对齐，
      * 命中则写入设置（主色/高亮色全局生效），返回是否应用。
+     * 带字号的皮肤（长辈模式）同步联动字体缩放。
      */
     private suspend fun applySkinIfMatch(id: String): Boolean {
         val item = runCatching { pluginManager.observeCatalog().first() }
@@ -123,6 +135,7 @@ class PluginsViewModel @Inject constructor(
         if (item.type != PluginType.SKIN) return false
         val preset = SkinPreset.ALL.firstOrNull { it.id == id } ?: return false
         settingsRepository.setSkin(preset.id, preset.toJson())
+        preset.fontScale?.let { settingsRepository.setFontScale(it) }
         return true
     }
 
