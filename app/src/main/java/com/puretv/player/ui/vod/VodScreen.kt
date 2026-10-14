@@ -8,6 +8,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -15,6 +16,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.GridItemSpan
 import androidx.compose.foundation.lazy.grid.LazyGridState
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.rememberLazyGridState
@@ -35,6 +37,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -66,6 +69,8 @@ import com.puretv.player.core.ui.TvTextButton
 import com.puretv.player.core.ui.isPortrait
 import com.puretv.player.data.local.entity.VodItemEntity
 import com.puretv.player.data.model.ImportProgress
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.filter
 
 /**
  * 影视点播（海报墙）：
@@ -79,6 +84,8 @@ fun VodScreen(nav: NavHostController) {
     val colors = PureTvTheme.colors
 
     val items by viewModel.items.collectAsStateWithLifecycle()
+    val displayedItems by viewModel.displayedItems.collectAsStateWithLifecycle()
+    val loadingMore by viewModel.loadingMore.collectAsStateWithLifecycle()
     val categories by viewModel.categories.collectAsStateWithLifecycle()
     val selectedKind by viewModel.selectedKind.collectAsStateWithLifecycle()
     val selectedCategory by viewModel.selectedCategory.collectAsStateWithLifecycle()
@@ -118,6 +125,21 @@ fun VodScreen(nav: NavHostController) {
     // 首页切换资源线路：列表换源清空重载，回到页面顶部衔接视觉
     LaunchedEffect(selectedSourceId) {
         runCatching { gridState.scrollToItem(0) }
+    }
+    // 动态分页：滚动到底部附近（预取 [PREFETCH_ITEMS] 项内）时追加下一批，
+    // 每次 +50 条（VM 侧），缓存见底时由仓库向资源站增量续拉，直到该线路全部加载完。
+    // 三元组键入 loadingMore/条数：上一批拉完若仍贴底，条数一变就再触发一轮；
+    // 此前布尔值恒 true 不会重发，短列表（动漫/综艺）滚不动就永远卡死不再加载。
+    LaunchedEffect(gridState) {
+        snapshotFlow {
+            val info = gridState.layoutInfo
+            val lastVisible = info.visibleItemsInfo.lastOrNull()?.index ?: -1
+            val atBottom = info.totalItemsCount > 0 && lastVisible >= info.totalItemsCount - PREFETCH_ITEMS
+            Triple(atBottom, info.totalItemsCount, loadingMore)
+        }
+            .distinctUntilChanged()
+            .filter { (atBottom, _, loading) -> atBottom && !loading }
+            .collect { viewModel.loadMoreItems() }
     }
 
     TvScaffold(
@@ -293,9 +315,10 @@ fun VodScreen(nav: NavHostController) {
                     )
 
                     else -> VodPosterGrid(
-                        items = items,
+                        items = displayedItems,
                         onOpen = { openDetail(nav, it) },
                         state = gridState,
+                        loadingMore = loadingMore,
                     )
                 }
             }
@@ -317,6 +340,9 @@ fun VodScreen(nav: NavHostController) {
 /** 同步转圈内的小数字标签：<1 万显示原数，更大折算 12k / 123k 形式保证 18dp 圈内放得下 */
 private fun syncCountLabel(count: Int): String =
     if (count < 10_000) count.toString() else "${count / 1000}k"
+
+/** 滚动预取阈值：可见项距底部还差这么多时提前触发下一批加载（约 1~2 行海报） */
+private const val PREFETCH_ITEMS = 8
 
 private fun openDetail(nav: NavHostController, item: VodItemEntity) {
     nav.navigate(Routes.vodDetail(item.sourceId, item.id))
@@ -661,7 +687,9 @@ private fun VodPosterGrid(
     state: LazyGridState = rememberLazyGridState(),
     modifier: Modifier = Modifier,
     sourceNames: Map<String, String> = emptyMap(),
+    loadingMore: Boolean = false,
 ) {
+    val colors = PureTvTheme.colors
     val portrait = isPortrait()
     val spacing = if (portrait) 12.dp else 20.dp
     LazyVerticalGrid(
@@ -685,6 +713,30 @@ private fun VodPosterGrid(
                 onClick = { onOpen(item) },
                 sourceName = sourceNames[item.sourceId],
             )
+        }
+        // 底部「正在加载更多」：滚动到底触发增量加载时展示，避免误以为已到底（整行占位）
+        if (loadingMore) {
+            item(span = { GridItemSpan(maxLineSpan) }) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(vertical = 14.dp),
+                    horizontalArrangement = Arrangement.Center,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(15.dp),
+                        color = colors.highlight,
+                        strokeWidth = 2.dp,
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(
+                        text = "正在加载更多…",
+                        color = colors.textSecondary,
+                        fontSize = 13.sp,
+                    )
+                }
+            }
         }
     }
 }

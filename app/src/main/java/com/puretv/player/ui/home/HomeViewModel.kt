@@ -108,21 +108,25 @@ class HomeViewModel @Inject constructor(
 
     init {
         viewModelScope.launch {
-            // 默认选中第一个资源站并加载首页数据
-            // （直接读 DAO，避免订阅型 StateFlow 的初始空值竞态）
-            var id = selectedSourceStore.selectedSourceId.value
-            if (id == null) {
-                id = sourceDao.observeAll()
-                    .first()
-                    .filter {
-                        it.enabled && (it.type == SourceType.CMS || it.type == SourceType.XTREAM)
-                    }
-                    .firstOrNull()
-                    ?.id
-                if (id != null) selectedSourceStore.select(id)
+            // 等 DataStore 恢复落地（awaitSelection）再决定选中线路：直接读 .value 会被
+            // 「默认第一个源」抢在恢复前执行并写回持久化，用户保存的线路每次启动都被覆盖。
+            val available = sourceDao.observeAll()
+                .first()
+                .filter {
+                    it.enabled && (it.type == SourceType.CMS || it.type == SourceType.XTREAM)
+                }
+            var id = selectedSourceStore.awaitSelection()
+            when {
+                // 历史线路仍可用（或源列表尚未就绪，先不误判）：保持用户选择——退出重进不回默认
+                id != null && (available.isEmpty() || available.any { it.id == id }) -> Unit
+                // 无历史选择 / 历史线路已失效（被删除或停用）：回落第一个可用源并记住
+                else -> {
+                    id = available.firstOrNull()?.id
+                    if (id != null) selectedSourceStore.select(id)
+                }
             }
             if (id != null) {
-                _sourceItems.value = vodDao.getItemsPaged(id, SOURCE_PAGE_SIZE, 0)
+                _sourceItems.value = vodDao.getItemsPaged(id, HOME_MAX_ITEMS, 0)
             }
         }
         // 源数据刷新后重查首页第一页：否则刷新前的旧条目残留列表，点入报「影片信息不存在」
@@ -131,7 +135,7 @@ class HomeViewModel @Inject constructor(
                 if (tick <= 0L) return@collect
                 val id = selectedSourceStore.selectedSourceId.value ?: return@collect
                 sourceLoadJob?.cancel()
-                _sourceItems.value = vodDao.getItemsPaged(id, SOURCE_PAGE_SIZE, 0)
+                _sourceItems.value = vodDao.getItemsPaged(id, HOME_MAX_ITEMS, 0)
             }
         }
         // 同步进行中每约 2 秒重查第一页：切线路清缓存后主页随服务器数据到达实时增长
@@ -140,12 +144,12 @@ class HomeViewModel @Inject constructor(
             var lastReloadAt = 0L
             vodRepository.syncProgress.collect { progress ->
                 if (progress == null) return@collect
-                if (_sourceItems.value.size > SOURCE_PAGE_SIZE) return@collect
+                if (_sourceItems.value.size > HOME_MAX_ITEMS) return@collect
                 val id = selectedSourceStore.selectedSourceId.value ?: return@collect
                 val now = System.currentTimeMillis()
                 if (now - lastReloadAt < 2_000L) return@collect
                 lastReloadAt = now
-                _sourceItems.value = vodDao.getItemsPaged(id, SOURCE_PAGE_SIZE, 0)
+                _sourceItems.value = vodDao.getItemsPaged(id, HOME_MAX_ITEMS, 0)
             }
         }
     }
@@ -157,7 +161,7 @@ class HomeViewModel @Inject constructor(
         _sourceItems.value = emptyList()
         sourceLoadJob?.cancel()
         sourceLoadJob = viewModelScope.launch {
-            _sourceItems.value = vodDao.getItemsPaged(sourceId, SOURCE_PAGE_SIZE, 0)
+            _sourceItems.value = vodDao.getItemsPaged(sourceId, HOME_MAX_ITEMS, 0)
         }
         // 切线路立即定向同步新线路（用户要求：首页与影视页数据都重新加载）。
         // 即使影视页从未打开过也会触发；与影视页发起的同目标同步在仓库侧自动去重，
@@ -165,22 +169,9 @@ class HomeViewModel @Inject constructor(
         vodRepository.requestSync(kind = null, onlySourceId = sourceId)
     }
 
-    /** 滚动到底部：加载当前资源站下一页影片 */
-    fun loadMoreSourceItems() {
-        val id = selectedSourceStore.selectedSourceId.value ?: return
-        val current = _sourceItems.value
-        if (sourceLoadJob?.isActive == true || current.isEmpty()) return
-        val total = vodSources.value.firstOrNull { it.id == id }?.channelCount ?: 0
-        if (total > 0 && current.size >= total) return
-        sourceLoadJob = viewModelScope.launch {
-            val more = vodDao.getItemsPaged(id, SOURCE_PAGE_SIZE, current.size)
-            if (more.isNotEmpty()) _sourceItems.value = current + more
-        }
-    }
-
     companion object {
-        /** 资源站浏览每页加载条数 */
-        private const val SOURCE_PAGE_SIZE = 60
+        /** 首页资源站浏览最多展示条数（固定展示最新 100 部，更多内容引导去影视点播界面） */
+        private const val HOME_MAX_ITEMS = 100
     }
 
     /* ======================================================================================== */

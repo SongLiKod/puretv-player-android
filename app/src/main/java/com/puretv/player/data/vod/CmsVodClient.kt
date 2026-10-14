@@ -36,6 +36,8 @@ class CmsVodClient @Inject constructor(
 
     /**
      * 详情列表（含播放地址）。page 从 1 开始。
+     * 按「更新时间倒序」拉取（MacCMS 协议 order=time&sort=desc）：
+     * 第 1 页即线路最近更新的内容，增量加载由新到旧一直往下。
      * @param categoryId 限定分类 id（type_id，来自 [fetchCategories]）
      * @param search 关键词搜索（MacCMS 约定 wd 参数）
      */
@@ -46,7 +48,7 @@ class CmsVodClient @Inject constructor(
         search: String? = null,
     ): CmsVodListDto {
         val base = apiBase(source) ?: return CmsVodListDto()
-        val sb = StringBuilder("$base?ac=detail&pg=$page")
+        val sb = StringBuilder("$base?ac=detail&pg=$page&order=time&sort=desc")
         categoryId?.takeIf { it.isNotBlank() }?.let { sb.append("&t=").append(encode(it)) }
         search?.takeIf { it.isNotBlank() }?.let { sb.append("&wd=").append(encode(it)) }
         return api.get(sb.toString())

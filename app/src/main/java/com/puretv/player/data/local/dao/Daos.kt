@@ -318,6 +318,10 @@ interface VodDao {
     @Query("SELECT COUNT(*) FROM vod_items WHERE sourceId = :sourceId")
     suspend fun countBySource(sourceId: String): Int
 
+    /** 该源某品类已缓存条数（标签滚动加载估算服务端过滤流的起始页用） */
+    @Query("SELECT COUNT(*) FROM vod_items WHERE sourceId = :sourceId AND kind = :kind")
+    suspend fun countBySourceKind(sourceId: String, kind: String): Int
+
     /**
      * 全量快照替换：事务内「删除 + 分块写入」，同步期间不出现空窗，
      * 避免列表中途清空导致 UI 分支切换、滚动位置重置（用户反馈的页面跳动问题）。

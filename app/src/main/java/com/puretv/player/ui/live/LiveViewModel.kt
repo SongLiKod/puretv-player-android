@@ -74,13 +74,18 @@ class LiveViewModel @Inject constructor(
     val selectedSourceId: StateFlow<String?> = selectedId
 
     init {
-        // 恢复上次选中的直播源（追加需求：退出软件重进不回默认）
         viewModelScope.launch {
-            val saved = settingsRepository.selectedLiveSourceId.firstOrNull()
-            if (saved != null) selectedId.compareAndSet(null, saved)
-        }
-        // 任何途径变更选中源（手动切换/导入新源/删除源）都持久化
-        viewModelScope.launch {
+            // 顺序化（退出软件重进不回默认）：先等持久化恢复落地，再启动「选中即保存」监听。
+            // 此前两条协程并发，恢复与首次写入的先后不保证；顺序化后任何途径的写入
+            // 都发生在恢复判定之后，所选直播源稳定记住。恢复失败也放行监听（finally 语义）。
+            try {
+                val saved = settingsRepository.selectedLiveSourceId.firstOrNull()
+                // 仅在用户尚未做出新选择时写入（避免恢复慢于交互覆盖用户选择）
+                if (saved != null) selectedId.compareAndSet(null, saved)
+            } catch (t: Throwable) {
+                // 恢复失败视为无历史选择，后续监听照常
+            }
+            // 任何途径变更选中源（手动切换/导入新源/删除源）都持久化
             selectedId.filterNotNull().distinctUntilChanged().collect { id ->
                 settingsRepository.setSelectedLiveSourceId(id)
             }

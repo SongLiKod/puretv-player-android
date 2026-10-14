@@ -17,6 +17,7 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.filter
@@ -161,6 +162,72 @@ class VodViewModel @Inject constructor(
             }
             .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
 
+    /**
+     * 展示条数上限：默认前 [VOD_INITIAL_PAGE] 条，滚动到底每次 +[VOD_LOAD_MORE] 条动态加载，
+     * 直到该线路全部加载完（切线路/品类/分类时重置回首批）。
+     */
+    private val visibleLimit = MutableStateFlow(VOD_INITIAL_PAGE)
+
+    /**
+     * 海报墙展示列表：缓存全量按 [visibleLimit] 截取。
+     * 配合仓库的增量同步（首批 100 条入库 + 滚动触发 loadMoreItems 续拉），实现
+     * 「默认 100 条、滚动每次 50 条一直往下加载」的动态分页。
+     */
+    val displayedItems: StateFlow<List<VodItemEntity>> =
+        combine(items, visibleLimit) { list, limit ->
+            if (list.size <= limit) list else list.take(limit)
+        }
+            .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+
+    /** 滚动增量加载进行中（海报墙底部显示「正在加载更多」，避免误以为已到底） */
+    private val _loadingMore = MutableStateFlow(false)
+    val loadingMore: StateFlow<Boolean> = _loadingMore.asStateFlow()
+
+    /**
+     * 滚动到底触发（海报墙预取到底部附近时由 UI 调用）：
+     * 展示上限 +[VOD_LOAD_MORE]；已到本地缓存边缘时让仓库向资源站继续拉下一批
+     * （携带当前品类标签：选了「电影」就凑满 50 部电影再返回，而不是混杂 50 条；
+     * MacCMS 一次请求即全量的 Xtream 无需处理）。
+     */
+    fun loadMoreItems() {
+        if (_loadingMore.value) return // 上一批还在拉：避免重复触发把展示上限顶飞
+        val newLimit = visibleLimit.value + VOD_LOAD_MORE
+        visibleLimit.value = newLimit
+        val sourceId = selectedSourceStore.selectedSourceId.value ?: return
+        if (newLimit < items.value.size) return // 当前标签的缓存还有余量：只放宽展示，无需联网
+        val kind = selectedKind.value
+        viewModelScope.launch {
+            _loadingMore.value = true
+            try {
+                vodRepository.loadMoreItems(sourceId, VOD_LOAD_MORE, kind = kind)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (t: Throwable) {
+                // 增量加载失败静默：保留断点，下次滚动到底自动重试
+            } finally {
+                _loadingMore.value = false
+            }
+        }
+    }
+
+    /**
+     * 切标签/切线路自动补一批：该标签缓存不足首批（[VOD_INITIAL_PAGE]）时**主动**触发
+     * 增量加载，而不是等滚动——动漫/综艺这类标签海报太少、列表短到滚不到底部，
+     * 滚动触发永远进不去（用户反馈：切到动漫/综艺既不加载也没有任何提示）。
+     *
+     * 由 Room 数据流驱动：入库一批重新评估，未到首批继续下一批（[loadMoreItems] 加载中
+     * 防重入）；拉到 ≥100 条或资源站到头（数据不再变化、Flow 不再发射）自然停。
+     */
+    init {
+        combine(selectedKind, selectedSourceStore.selectedSourceId, items) { kind, sourceId, list ->
+            Triple(kind ?: "", sourceId ?: "", list)
+        }
+            .distinctUntilChanged()
+            .filter { (kind, _, list) -> kind.isNotEmpty() && list.size < VOD_INITIAL_PAGE }
+            .onEach { loadMoreItems() }
+            .launchIn(viewModelScope)
+    }
+
     /** 搜索结果（本地缓存；在线命中的条目已入库，Room Flow 自动带出；按「本站/全网」范围过滤） */
     val searchResults: StateFlow<List<VodItemEntity>> =
         combine(searchQuery, searchScopeAll, selectedSourceId) { query, all, sourceId ->
@@ -246,8 +313,9 @@ class VodViewModel @Inject constructor(
             } catch (t: Throwable) {
                 // 纠正失败不影响列表功能
             }
-            // 「本站搜索」默认资源站：未选中时兜底为第一个可用点播源（CMS/Xtream）
-            if (selectedSourceStore.selectedSourceId.value == null) {
+            // 「本站搜索」默认资源站：未选中时兜底为第一个可用点播源（CMS/Xtream）。
+            // 先等 DataStore 恢复落地再判断——直接读 .value 会被默认源抢占写回，覆盖保存的选择
+            if (selectedSourceStore.awaitSelection() == null) {
                 val first = vodRepository.vodSources.first()
                     .filter {
                         it.type == com.puretv.player.data.model.SourceType.CMS ||
@@ -280,10 +348,12 @@ class VodViewModel @Inject constructor(
     fun selectKind(kind: String?) {
         selectedKind.value = kind
         selectedCategory.value = null
+        visibleLimit.value = VOD_INITIAL_PAGE
     }
 
     fun selectCategory(category: String?) {
         selectedCategory.value = category
+        visibleLimit.value = VOD_INITIAL_PAGE
     }
 
     /** 切换搜索范围（本站/全网），切换后对当前关键词立即重搜 */
@@ -337,11 +407,12 @@ class VodViewModel @Inject constructor(
         )
     }
 
-    /** 首页切换资源线路：影视页清空旧线路视图（筛选/搜索），并定向同步新线路（与首页发起的同目标同步去重） */
+    /** 首页切换资源线路：影视页清空旧线路视图（筛选/搜索），并定向同步新线路首批（与首页发起的同目标同步去重） */
     private fun onSourceSwitched(sourceId: String?) {
         selectedKind.value = null
         selectedCategory.value = null
         clearSearch()
+        visibleLimit.value = VOD_INITIAL_PAGE
         vodRepository.requestSync(kind = selectedKind.value, onlySourceId = sourceId)
     }
 
@@ -353,6 +424,12 @@ class VodViewModel @Inject constructor(
     companion object {
         /** 自动追更同步间隔：30 分钟 */
         private const val AUTO_SYNC_INTERVAL_MS = 30 * 60 * 1000L
+
+        /** 海报墙默认加载条数（进页面/切线路先显示这么多） */
+        private const val VOD_INITIAL_PAGE = 100
+
+        /** 滚动到底每次追加的条数（动态加载，直到该线路全部加载完） */
+        private const val VOD_LOAD_MORE = 50
 
         /**
          * 常用搜索词（内置热门关键词，均为各资源站高命中题材，点按即搜）。

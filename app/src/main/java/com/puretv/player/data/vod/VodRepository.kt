@@ -36,6 +36,9 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import java.text.SimpleDateFormat
+import java.util.Locale
+import java.util.concurrent.ConcurrentHashMap
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -93,6 +96,56 @@ class VodRepository @Inject constructor(
     private var holdAbort = false
 
     /**
+     * CMS 线路增量分页断点（点播页动态加载）：
+     * - [CmsPaging.Exhausted] 已拉到资源站末页，滚动加载不再发请求；
+     * - [CmsPaging.Continue] 从 [CmsPaging.Continue.nextPage] 继续（totalPages=0 表示服务端未给页数）。
+     * 仅存内存态；冷启动丢失时按缓存条数推算已加载页码。
+     */
+    private sealed interface CmsPaging {
+        object Exhausted : CmsPaging
+        data class Continue(val nextPage: Int, val totalPages: Int) : CmsPaging
+    }
+
+    /** sourceId → 增量分页断点 */
+    private val cmsPaging = ConcurrentHashMap<String, CmsPaging>()
+
+    /**
+     * sourceId → (typeId → 该分类归入的品类)：从拉取到的条目累积学习
+     * （MacCMS 分类 id 由站点自定，无官方枚举接口），供标签加载走服务端 t= 过滤。
+     */
+    private val cmsTypeKinds = ConcurrentHashMap<String, ConcurrentHashMap<String, String>>()
+
+    /** sourceId → (kind → 分类过滤流的下一页页码)；[Int.MAX_VALUE] = 该标签已到末页 */
+    private val cmsKindPaging = ConcurrentHashMap<String, ConcurrentHashMap<String, Int>>()
+
+    /** 增量加载互斥（滚动事件密集：同时只允许一个任务，后来者直接跳过） */
+    private val loadMoreLock = Mutex()
+
+    /**
+     * 从条目学习「分类 id → 品类」归属（按分类名**模糊归类**：日漫/国产动漫/少儿/国创…
+     * 等关键词命中即归入对应标签，增量加载/整源同步时持续累积）。
+     *
+     * type_id 在 DTO 里声明为 Any，Moshi 把 JSON 数字解析成 Double（6 → 6.0）——直接
+     * toString 会向服务器发 t=6.0，部分站点不认（分类 id 学错 → 该标签过滤拉不到内容，
+     * 用户反馈的动漫/综艺不加载），所以先归一化成整数串。
+     */
+    private fun rememberCmsType(sourceId: String, rawTypeId: Any?, categoryName: String?) {
+        val typeId = typeIdToString(rawTypeId) ?: return
+        val kind = VodKindClassifier.ofCategory(categoryName.orEmpty())
+        cmsTypeKinds.getOrPut(sourceId) { ConcurrentHashMap() }[typeId] = kind
+    }
+
+    /** JSON 数字 id 归一化：6.0 → "6"、"6.0" → "6"；非数字 id 原样保留；空值丢弃 */
+    private fun typeIdToString(raw: Any?): String? = when (raw) {
+        null -> null
+        is Number -> raw.toInt().toString()
+        else -> raw.toString().trim().let { text ->
+            val head = text.substringBefore('.')
+            if (head.isNotEmpty() && head.all { it in '0'..'9' }) head else text.takeIf { it.isNotEmpty() }
+        }
+    }
+
+    /**
      * 发起同步（非挂起，任意界面可调）：
      * - 相同目标（线路 + 品类）进行中 → 幂等跳过（首页与影视页双入口不重复拉取）；
      * - 目标不同 → 取消进行中的任务并立即按新目标重启；
@@ -113,8 +166,15 @@ class VodRepository @Inject constructor(
                 message = if (onlySourceId == null) "正在同步点播资源…" else "正在同步所选线路…",
             )
             try {
-                refresh(kind = kind, onlySourceId = onlySourceId) { progress ->
+                val report: (ImportProgress) -> Unit = { progress ->
                     if (seq == syncSeq) _syncProgress.value = progress
+                }
+                if (onlySourceId != null) {
+                    // 点播页语义：进页面/切线路/手动刷新只加载该线路首批 INITIAL_LOAD_ITEMS 条，
+                    // 剩余影片由 loadMoreItems() 随用户滚动增量拉取（不再整源一次拉完）
+                    refreshInitial(onlySourceId, report)
+                } else {
+                    refresh(kind = kind, onlySourceId = null, onProgress = report)
                 }
             } finally {
                 // 加载完成：圈内停留展示累计总数几秒再收起（用户要求「加载完显示总数」）。
@@ -372,7 +432,9 @@ class VodRepository @Inject constructor(
             playUrl = if (isSeries) null else primary.episodes.firstOrNull()?.url,
             totalEpisodes = if (isSeries) primary.episodes.size else null,
             latestEpisode = if (isSeries) primary.episodes.size else null,
-            updatedAt = System.currentTimeMillis(),
+            // 站点更新时间（vod_time）：列表查询统一 ORDER BY updatedAt DESC，必须存站点时间
+            // 而非入库时间，否则「最新在前」排序失效（曾导致海报墙顺序错乱）
+            updatedAt = parseCmsTime(item.vodTime),
         )
         val episodes = if (isSeries) {
             val all = ArrayList<VodEpisodeEntity>()
@@ -451,18 +513,6 @@ class VodRepository @Inject constructor(
         }
         try {
             sources.forEach { source ->
-                // 切线路硬刷新（用户要求）：先清空该线路的本地缓存（影片/分集/统计），
-                // 主页与影视页随之清空，本次同步只展示从服务器重新拉回的数据
-                if (onlySourceId != null) {
-                    vodDao.deleteBySource(source.id)
-                    vodDao.deleteEpisodesBySource(source.id)
-                    sourceDao.updateStats(
-                        id = source.id,
-                        channelCount = 0,
-                        groupCount = 0,
-                        syncedAt = 0,
-                    )
-                }
                 // 偏移 = 已完成线路的写入片数：新线路的进度在此基础上继续累加
                 val offset = totalSaved
                 val sourceReport: (ImportProgress) -> Unit = { p -> report(p, offset) }
@@ -496,6 +546,258 @@ class VodRepository @Inject constructor(
             // 数据库已重建（含失败/取消时的部分写入）：通知首页等快照列表重查，避免旧条目残留
             _refreshTick.value = _refreshTick.value + 1
         }
+    }
+
+    /**
+     * 线路初始加载（打开点播页 / 首页切线路 / 手动刷新按钮）：
+     * 硬清该线路缓存后只拉前 [INITIAL_LOAD_ITEMS] 条（约前 5 页），加载快、不阻塞；
+     * 剩余影片由 [loadMoreItems] 在用户滚动到底时增量拉取，直到该线路全部加载完。
+     * Xtream 协议无服务端分页，仍为单次全量请求（展示层再分页）。
+     */
+    private suspend fun refreshInitial(
+        sourceId: String,
+        onProgress: (ImportProgress) -> Unit,
+    ) = withContext(io) {
+        val source = sourceDao.get(sourceId)
+        if (source == null || !source.enabled ||
+            (source.type != SourceType.CMS && source.type != SourceType.XTREAM)
+        ) {
+            onProgress(
+                ImportProgress(
+                    stage = Stage.FAILED,
+                    message = "所选线路无需同步（仅直播源或未启用点播）",
+                ),
+            )
+            return@withContext
+        }
+        // 硬刷新：清空该线路本地缓存（影片/分集/统计），本次只展示从服务器重新拉回的数据
+        cmsPaging.remove(sourceId)
+        cmsTypeKinds.remove(sourceId)
+        cmsKindPaging.remove(sourceId)
+        vodDao.deleteBySource(sourceId)
+        vodDao.deleteEpisodesBySource(sourceId)
+        sourceDao.updateStats(id = sourceId, channelCount = 0, groupCount = 0, syncedAt = 0)
+        onProgress(ImportProgress(stage = Stage.PREPARING, message = "正在加载「${source.name}」…"))
+        val saved = try {
+            if (source.type == SourceType.CMS) {
+                refreshCmsSource(
+                    source = source,
+                    kind = null,
+                    onProgress = onProgress,
+                    budgetItems = INITIAL_LOAD_ITEMS,
+                    markFailure = { },
+                )
+            } else {
+                refreshXtreamSource(source, kind = null, onProgress) { }
+            }
+        } catch (e: CancellationException) {
+            onProgress(ImportProgress(stage = Stage.FAILED, message = "已取消同步"))
+            throw e
+        } catch (t: Throwable) {
+            onProgress(
+                ImportProgress(stage = Stage.FAILED, message = "同步失败：${t.message ?: "网络异常"}"),
+            )
+            0
+        }
+        lastRefreshAt = System.currentTimeMillis()
+        onProgress(
+            ImportProgress(
+                stage = Stage.DONE,
+                processed = saved,
+                total = saved,
+                message = "已加载前 $saved 部，滚动到底继续加载",
+            ),
+        )
+        _refreshTick.value = _refreshTick.value + 1
+    }
+
+    /**
+     * 滚动到底增量加载（MacCMS 服务端分页）：从断点页继续拉取入库，
+     * 直到新增 ≥ [needed] 条或到达资源站末页；增量写库，海报墙随滚动实时增长。
+     * [kind] = 当前选中的品类标签（电影/电视剧/综艺/动漫，null = 全部）：
+     * MacCMS 协议无品类参数，翻页途中非该品类的条目也入缓存、但**不计入条数**，
+     * 保证「选电影滚动一次 = 实打实追加 50 部电影」，而不是混杂 50 条。
+     * 同线路同时只允许一个任务（滚动触发密集，tryLock 去抖）；Xtream 一次请求即全量，无需增量。
+     * @return 实际计入条数（kind 口径的新增入库条数）
+     */
+    suspend fun loadMoreItems(
+        sourceId: String,
+        needed: Int = LOAD_MORE_ITEMS,
+        kind: String? = null,
+    ): Int = withContext(io) {
+        val source = sourceDao.get(sourceId)
+        if (source == null || source.type != SourceType.CMS) return@withContext 0
+        if (!loadMoreLock.tryLock()) return@withContext 0
+        try {
+            // 选中标签：优先走服务端分类过滤（MacCMS t=分类id）——返回的整页都是该品类，
+            // 约 3 页就凑满一批，不再「翻好几页才碰到几条」。分类 id 未学到时直接走通用翻页；
+            // 已学到但服务器不认（首翻空页/整页都不是该标签）返回 -1 → 作废分类 id 后，
+            // **同一次调用内**回退通用翻页按标签凑数，不让用户对着空列表干等一次滚动。
+            if (!kind.isNullOrBlank()) {
+                val typeIds = cmsTypeKinds[sourceId]
+                    ?.filterValues { it == kind }?.keys?.toList().orEmpty()
+                if (typeIds.isNotEmpty()) {
+                    val byType = loadMoreByType(source, kind, typeIds, needed)
+                    if (byType >= 0) return@withContext byType
+                }
+            }
+            var paging = cmsPaging[sourceId]
+            if (paging == CmsPaging.Exhausted) return@withContext 0
+            if (paging !is CmsPaging.Continue) {
+                // 冷启动断点丢失（仅存内存）：按缓存条数推算已加载页码（每页 [CMS_PAGE_SIZE] 条）
+                val cached = vodDao.countBySource(sourceId)
+                paging = CmsPaging.Continue(nextPage = cached / CMS_PAGE_SIZE + 1, totalPages = 0)
+            }
+            var nextPage = paging.nextPage
+            var totalPages = paging.totalPages.takeIf { it > 1 } ?: 0 // 0 = 服务端未提供页数，靠空页停止
+            var added = 0
+            var exhausted = false
+            var lastFirstId: String? = null
+            while (added < needed && !exhausted) {
+                currentCoroutineContext().ensureActive()
+                val dto = fetchDetailPageWithRetry(source, nextPage)
+                if (dto == null) break // 本次失败：保留断点，下次滚动到底再续拉
+                val list = dto.list.orEmpty()
+                // 空页 = 到末页；首页 id 与上一页相同 = 资源站忽略 pg 翻页参数（防死循环）
+                val firstId = list.firstOrNull()?.vodId?.toString()
+                if (list.isEmpty() || (lastFirstId != null && lastFirstId == firstId)) {
+                    exhausted = true
+                    break
+                }
+                lastFirstId = firstId
+                val entities = ArrayList<VodItemEntity>(list.size)
+                val episodes = ArrayList<VodEpisodeEntity>()
+                var matchedCount = 0
+                list.forEach { item ->
+                    val mapped = mapCmsItem(source, item) ?: return@forEach
+                    entities += mapped.first
+                    episodes += mapped.second
+                    // 持续学习「分类 id → 品类」，下次该标签直接走服务端过滤
+                    rememberCmsType(sourceId, item.typeId, mapped.first.category)
+                    // 计数口径 = 当前标签（选了标签就只认该品类，凑满 needed 条为止）
+                    if (kind.isNullOrBlank() || mapped.first.kind == kind) matchedCount++
+                }
+                if (entities.isNotEmpty()) {
+                    vodDao.upsertAll(entities)
+                    if (episodes.isNotEmpty()) vodDao.upsertEpisodes(episodes)
+                    added += matchedCount
+                }
+                // 只信任 >1 的页数（无 pagecount 的站点按 1 返回，靠空页兜底停止）
+                val reported = dto.pageInt
+                if (reported > 1) totalPages = reported
+                nextPage++
+                if (totalPages > 0 && nextPage > totalPages) exhausted = true
+            }
+            cmsPaging[sourceId] =
+                if (exhausted) CmsPaging.Exhausted else CmsPaging.Continue(nextPage, totalPages)
+            if (added > 0) {
+                // 只回写片数（保留原分类数/同步时间），设置页与首页分页上限随之更新
+                val cached = vodDao.countBySource(sourceId)
+                val stats = sourceDao.get(sourceId)
+                sourceDao.updateStats(
+                    id = sourceId,
+                    channelCount = cached,
+                    groupCount = stats?.groupCount ?: 0,
+                    syncedAt = stats?.lastSyncAt ?: System.currentTimeMillis(),
+                )
+                _refreshTick.value = _refreshTick.value + 1
+            }
+            added
+        } finally {
+            loadMoreLock.unlock()
+        }
+    }
+
+    /**
+     * 标签增量加载（服务端分类过滤）：`t=分类id` 直接向资源站要该品类的下一批，
+     * 返回的整页（默认 20 条）全部是所选标签内容——约 3 页凑满 50 条，一批到达、不再零星冒条。
+     *
+     * 起始页估算：分类过滤流按更新时间倒序、与无过滤流同序，已缓存的该品类条数
+     * （[VodDao.countBySourceKind]）即该流的头部，从下一页开始避免重复拉已缓存内容。
+     * 分类 id 由分类名**模糊学习**（[VodKindClassifier]：日漫/国产动漫/少儿…均归动漫），
+     * 每翻一页继续累积新分类 id。
+     *
+     * **过滤有效性校验**：首翻空页（本地明明有该标签内容）或整页条目都不是该标签
+     * = 服务器没认 t= 参数（或分类 id 学错）→ 作废该标签已学 id、不记末页断点，
+     * 返回 -1 让调用方同一次调用内回退通用翻页凑数（用户反馈：动漫/综艺标签不加载）。
+     *
+     * @return 本标签新增条数；-1 = t= 过滤不可用已回退（id 已作废）
+     */
+    private suspend fun loadMoreByType(
+        source: SourceEntity,
+        kind: String,
+        typeIds: List<String>,
+        needed: Int,
+    ): Int {
+        val kindPaging = cmsKindPaging.getOrPut(source.id) { ConcurrentHashMap() }
+        val storedPage = kindPaging[kind]
+        if (storedPage == Int.MAX_VALUE) return 0 // 该标签此前已到末页
+        // 首次为该标签加载：从「已缓存条数 / 每页」推算起始页，跳过已有的头部内容
+        var page = storedPage ?: (vodDao.countBySourceKind(source.id, kind) / CMS_PAGE_SIZE + 1)
+        val startPage = page
+        val freshRun = storedPage == null
+        var added = 0
+        var exhausted = false
+        var filterBroken = false
+        var lastFirstId: String? = null
+        var totalPages = 0
+        while (added < needed && !exhausted) {
+            currentCoroutineContext().ensureActive()
+            val dto = fetchDetailPageWithRetry(source, page, categoryId = typeIds.joinToString(","))
+            if (dto == null) break // 网络失败：保留分类 id 与页码断点，下次滚动重试
+            val list = dto.list.orEmpty()
+            val firstId = list.firstOrNull()?.vodId?.toString()
+            // 空页 = 分类流到末页；连续两页首条相同 = 站点忽略翻页参数（防死循环）
+            if (list.isEmpty() || (lastFirstId != null && lastFirstId == firstId)) {
+                // 首翻就空：本地有该标签内容而 t= 流头部为空 → 过滤没生效（id 学错/不支持）
+                if (list.isEmpty() && freshRun && page == startPage && added == 0) {
+                    filterBroken = true
+                } else {
+                    exhausted = true
+                }
+                break
+            }
+            lastFirstId = firstId
+            val entities = ArrayList<VodItemEntity>(list.size)
+            val episodes = ArrayList<VodEpisodeEntity>()
+            var matched = 0
+            list.forEach { item ->
+                val mapped = mapCmsItem(source, item) ?: return@forEach
+                entities += mapped.first
+                episodes += mapped.second
+                // 服务端 t= 过滤期间也继续学习分类 id（细分小类逐步补齐：日漫/国产动漫…）
+                rememberCmsType(source.id, item.typeId, mapped.first.category)
+                if (mapped.first.kind == kind) matched++
+            }
+            if (entities.isNotEmpty()) {
+                vodDao.upsertAll(entities)
+                if (episodes.isNotEmpty()) vodDao.upsertEpisodes(episodes)
+                added += matched
+            }
+            // 整页都不是该标签：服务器忽略了 t= 参数（或分类 id 学错）→ 本流不可用
+            if (list.isNotEmpty() && matched == 0) {
+                filterBroken = true
+                break
+            }
+            val reported = dto.pageInt
+            if (reported > 1) totalPages = reported
+            page++
+            if (totalPages > 0 && page > totalPages) exhausted = true
+        }
+        if (filterBroken) {
+            // 作废该标签已学的分类 id（大概率是 6.0 双精度串/父分类 id/站点不支持 t=），
+            // 不记末页断点；本标签此后回退通用翻页，重新学习到的 id 会自动再试 t=
+            val learned = cmsTypeKinds[source.id]
+            learned?.filterValues { it == kind }?.keys?.toList()
+                ?.forEach { learned.remove(it) }
+            return -1
+        }
+        // 断点续存：末页置 MAX_VALUE 停止后续请求；失败保留页码下次滚动重试
+        kindPaging[kind] = when {
+            exhausted -> Int.MAX_VALUE
+            else -> page
+        }
+        return added
     }
 
     /**
@@ -606,13 +908,16 @@ class VodRepository @Inject constructor(
 
     /**
      * MacCMS 采集源单源刷新（TVBox 资源站通用协议）：
-     * 逐页拉取 ac=detail（含播放地址），映射条目与分集后整源替换写库。
+     * 逐页拉取 ac=detail（含播放地址），映射条目与分集后写库。
      * 电影取首条播放线直链；剧集解析全部分集入库（详情页可选线路）。
+     * @param budgetItems 预算截断（点播页初始加载）：累计条数达到该值即停，
+     *   剩余影片由 [loadMoreItems] 滚动增量拉取；null = 整源全量刷新
      */
     private suspend fun refreshCmsSource(
         source: SourceEntity,
         kind: String?,
         onProgress: (ImportProgress) -> Unit,
+        budgetItems: Int? = null,
         markFailure: () -> Unit,
     ): Int {
         val firstPage = try {
@@ -624,12 +929,14 @@ class VodRepository @Inject constructor(
             onProgress(ImportProgress(stage = Stage.FAILED, message = "「${source.name}」连接失败"))
             return 0
         }
-        val totalPages = firstPage.pageInt.coerceAtLeast(1) // 不限页数：资源有多少采集多少（用户明确要求）
+        var totalPages = firstPage.pageInt.coerceAtLeast(1) // 有效页数（>1 才可信；无 pagecount 的站点按 1 返回）
         val items = ArrayList<VodItemEntity>(firstPage.totalInt.coerceAtLeast(0))
         val episodes = HashMap<String, List<VodEpisodeEntity>>()
         var page = 1
         var dto = firstPage
         var fetchFailed = false
+        var budgetHit = false
+        var prevFirstId: String? = null
         // 圈内小数字要显示「已加载部数」：总长按资源站返回的总条数估算，接口没给就按页数×每页条数
         val estimatedTotal = firstPage.totalInt.takeIf { it > 0 }
             ?: totalPages * (firstPage.list?.size?.takeIf { it > 0 } ?: 20)
@@ -642,6 +949,8 @@ class VodRepository @Inject constructor(
                 val mapped = mapCmsItem(source, item) ?: return@forEach
                 val (entity, allEpisodes) = mapped
                 items += entity
+                // 持续学习「分类 id → 品类」，供标签滚动加载走服务端 t= 过滤
+                rememberCmsType(source.id, item.typeId, entity.category)
                 if (allEpisodes.isNotEmpty()) episodes[entity.id] = allEpisodes
                 // 与收尾 matched 同口径过滤，保证入库数 == 最终写入数
                 if (kind.isNullOrBlank() || entity.kind == kind) pageEntities += entity
@@ -654,16 +963,31 @@ class VodRepository @Inject constructor(
                 val pageEpisodes = pageEntities.flatMap { e -> episodes[e.id].orEmpty() }
                 if (pageEpisodes.isNotEmpty()) vodDao.upsertEpisodes(pageEpisodes)
             }
-            // 圈内数字 = 已入库条数（返回来的真实数字），实时上报
+            // 圈内数字 = 已入库条数（返回来的真实数字），实时上报（页数未知显示 ?）
             onProgress(
                 ImportProgress(
                     stage = Stage.PARSING,
                     processed = written,
                     total = estimatedTotal,
-                    message = "正在同步「${source.name}」第 $page/$totalPages 页…",
+                    message = "正在同步「${source.name}」第 $page/${totalPages.takeIf { it > 1 } ?: "?"} 页…",
                 )
             )
-            if (page >= totalPages || dto.list.isNullOrEmpty()) break
+            if (dto.list.isNullOrEmpty()) break
+            // 资源站忽略 pg 翻页参数（连续两页首条相同）：视为到末页，防死循环
+            val pageFirstId = dto.list?.firstOrNull()?.vodId?.toString()
+            if (pageFirstId != null && pageFirstId == prevFirstId) break
+            prevFirstId = pageFirstId
+            // 预算截断：够首批即停，断点记入增量分页状态，剩余随滚动加载
+            if (budgetItems != null && items.size >= budgetItems) {
+                budgetHit = true
+                break
+            }
+            if (totalPages > 1) {
+                if (page >= totalPages) break
+            } else if (budgetItems == null) {
+                // 整源刷新且服务端没给有效页数：维持旧口径停在第 1 页（预算加载则继续翻页，靠空页/重复页兜底）
+                break
+            }
             page++
             val next = fetchDetailPageWithRetry(source, page)
             if (next == null) {
@@ -672,6 +996,9 @@ class VodRepository @Inject constructor(
                 break
             }
             dto = next
+            // 服务端可能在后续页更新总页数（部分站点首响应给 0/1）
+            val reportedPages = next.pageInt
+            if (reportedPages > 1) totalPages = reportedPages
             // 每 50 页回写一次统计，长任务进行中也能看到片数增长
             if (page % STATS_EVERY_PAGES == 0) {
                 sourceDao.updateStats(
@@ -681,6 +1008,15 @@ class VodRepository @Inject constructor(
                     syncedAt = System.currentTimeMillis(),
                 )
             }
+        }
+        // 增量分页断点：预算截断/翻页中断 → 记录续传页（滚动到底时继续拉）；正常拉完 → 已到末页
+        // totalPages 归一：≤1 视为「服务端未提供页数」存 0（靠空页兜底停止）
+        cmsPaging[source.id] = when {
+            budgetHit || fetchFailed -> CmsPaging.Continue(
+                nextPage = page + 1,
+                totalPages = totalPages.takeIf { it > 1 } ?: 0,
+            )
+            else -> CmsPaging.Exhausted
         }
         val matched = if (kind.isNullOrBlank()) items else items.filter { it.kind == kind }
         onProgress(
@@ -726,13 +1062,18 @@ class VodRepository @Inject constructor(
     /**
      * 分页拉取（带重试）：单页瞬时失败自动重试 [PAGE_FETCH_RETRIES] 次，
      * 避免一次抖动导致整源同步被截断成「只有第 1 页」（用户反馈的 20 部问题）。
+     * @param categoryId 分类过滤（MacCMS t= 参数，逗号分隔多 id；null = 全部分类）
      * @return 第 [page] 页数据；重试耗尽返回 null
      */
-    private suspend fun fetchDetailPageWithRetry(source: SourceEntity, page: Int): CmsVodListDto? {
+    private suspend fun fetchDetailPageWithRetry(
+        source: SourceEntity,
+        page: Int,
+        categoryId: String? = null,
+    ): CmsVodListDto? {
         repeat(PAGE_FETCH_RETRIES) { attempt ->
             currentCoroutineContext().ensureActive()
             try {
-                return cmsClient.fetchDetailPage(source, page = page)
+                return cmsClient.fetchDetailPage(source, page = page, categoryId = categoryId)
             } catch (e: CancellationException) {
                 throw e
             } catch (t: Throwable) {
@@ -948,6 +1289,30 @@ class VodRepository @Inject constructor(
     private fun yearOf(date: String?): String? =
         date?.trim()?.takeIf { it.length >= 4 }?.substring(0, 4)?.toIntOrNull()?.toString()
 
+    /**
+     * MacCMS vod_time → 毫秒时间戳（海报墙「最新在前」排序依据）。
+     * 兼容三种形态："2024-05-01 12:30:00" / "2024-05-01" / Unix 时间戳（10 位秒、13 位毫秒）；
+     * 解析失败回退当前时间（保底不打乱排序）。
+     */
+    private fun parseCmsTime(value: String?): Long {
+        val trimmed = value?.trim().orEmpty()
+        if (trimmed.isEmpty()) return System.currentTimeMillis()
+        trimmed.toLongOrNull()?.let { raw ->
+            return when {
+                raw >= 1_000_000_000_000L -> raw // 毫秒时间戳
+                raw >= 1_000_000_000L -> raw * 1000 // 秒时间戳
+                else -> System.currentTimeMillis() // 无效数值
+            }
+        }
+        return try {
+            val pattern = if (trimmed.length >= 19) "yyyy-MM-dd HH:mm:ss" else "yyyy-MM-dd"
+            SimpleDateFormat(pattern, Locale.US).parse(trimmed)?.time
+                ?: System.currentTimeMillis()
+        } catch (t: Throwable) {
+            System.currentTimeMillis()
+        }
+    }
+
     companion object {
         private val ALL_KINDS = listOf(VodKind.MOVIE, VodKind.SERIES, VodKind.VARIETY, VodKind.ANIME)
 
@@ -962,6 +1327,15 @@ class VodRepository @Inject constructor(
 
         /** 同步途中回写统计的页间隔（长任务进行中也能看到片数增长） */
         private const val STATS_EVERY_PAGES = 50
+
+        /** 点播页初始加载条数（进页面/切线路只拉这么多，加载快；剩余随滚动增量拉取） */
+        private const val INITIAL_LOAD_ITEMS = 100
+
+        /** 滚动到底每次增量加载条数 */
+        private const val LOAD_MORE_ITEMS = 50
+
+        /** MacCMS 服务端每页条数（冷启动断点丢失时按缓存条数推算已加载页码用） */
+        private const val CMS_PAGE_SIZE = 20
 
         /** 同步完成后圈内停留展示「累计总数」的时长（毫秒），随后恢复刷新图标 */
         private const val SYNC_DONE_HOLD_MS = 4_000L

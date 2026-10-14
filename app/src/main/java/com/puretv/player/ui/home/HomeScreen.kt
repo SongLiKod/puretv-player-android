@@ -1,6 +1,7 @@
 package com.puretv.player.ui.home
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -95,7 +96,6 @@ fun HomeScreen(
     val vodSources by viewModel.vodSources.collectAsStateWithLifecycle()
     val selectedSourceId by viewModel.selectedSourceId.collectAsStateWithLifecycle()
     val sourceItems by viewModel.visibleSourceItems.collectAsStateWithLifecycle()
-    val selectedSourceTotal by viewModel.selectedSourceTotal.collectAsStateWithLifecycle()
 
     val modules = listOf(
         HomeModule(
@@ -219,10 +219,9 @@ fun HomeScreen(
         // 资源站浏览（追加需求：首页可切换当前资源站，显示该资源站网址上的所有视频）
         if (vodSources.isNotEmpty()) {
             SourceBrowseSection(
-                total = selectedSourceTotal,
                 items = sourceItems,
                 portrait = portrait,
-                onLoadMore = viewModel::loadMoreSourceItems,
+                onSeeMore = { nav.navigate(Routes.VOD) },
                 onOpen = { nav.navigate(Routes.vodDetail(it.sourceId, it.id)) },
                 modifier = Modifier.padding(top = if (portrait) 16.dp else 24.dp),
             )
@@ -232,15 +231,15 @@ fun HomeScreen(
 
 /**
  * 资源站浏览区（追加需求）：
- * 直接网格展示当前资源站已缓存影片，滚动到底自动加载下一页（[HomeViewModel.loadMoreSourceItems]）。
+ * 直接网格展示当前资源站已缓存影片，**固定最新 [HOME_MAX_ITEMS] 条、不再滚动加载**，
+ * 底部提示更多内容去「影视点播」界面（其内滚动到底继续增量拉取）。
  * 「资源站影片 共N部」标题与站点胶囊标签行按用户要求去掉；站点切换走顶部右上角 SourceSwitcher。
  */
 @Composable
 private fun SourceBrowseSection(
-    total: Int,
     items: List<VodItemEntity>,
     portrait: Boolean,
-    onLoadMore: () -> Unit,
+    onSeeMore: () -> Unit,
     onOpen: (VodItemEntity) -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -255,11 +254,6 @@ private fun SourceBrowseSection(
             )
         } else {
             val gridState = rememberLazyGridState()
-            LaunchedEffect(gridState, items.size, total) {
-                val info = gridState.layoutInfo
-                val lastVisible = info.visibleItemsInfo.lastOrNull()?.index ?: 0
-                if (lastVisible >= items.size - 8 && items.size < total) onLoadMore()
-            }
             // 网格高度按实际行数收敛（此前固定 430dp，影片少时底部空出一大块，用户反馈）；
             // 超过 430dp 才封顶，由网格内部继续滚动。列数按 GridCells.Adaptive 同款公式推算。
             BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
@@ -289,18 +283,19 @@ private fun SourceBrowseSection(
                 items(items, key = { "${it.sourceId}|${it.id}" }) { item ->
                     VodPosterCard(item = item, onClick = { onOpen(item) })
                 }
-                if (items.size < total) {
-                    item(span = { GridItemSpan(maxLineSpan) }) {
-                        Text(
-                            text = "加载中… 已缓存 ${items.size} / $total 部",
-                            color = colors.textHint,
-                            fontSize = 12.sp,
-                            textAlign = TextAlign.Center,
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(vertical = 12.dp),
-                        )
-                    }
+                // 首页固定只展示最新一批（HOME_MAX_ITEMS=100）：底部提示更多内容去影视点播界面
+                item(span = { GridItemSpan(maxLineSpan) }) {
+                    Text(
+                        text = "仅展示最新 ${items.size} 部，查看更多影片请进入「影视点播」→",
+                        color = colors.textSecondary,
+                        fontSize = 12.sp,
+                        textAlign = TextAlign.Center,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(8.dp))
+                            .clickable(onClick = onSeeMore)
+                            .padding(vertical = 10.dp),
+                    )
                 }
                 }
             }
