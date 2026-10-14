@@ -126,19 +126,23 @@ fun VodScreen(nav: NavHostController) {
     LaunchedEffect(selectedSourceId) {
         runCatching { gridState.scrollToItem(0) }
     }
-    // 动态分页：滚动到底部附近（预取 [PREFETCH_ITEMS] 项内）时追加下一批，
+    // 动态分页（预取式加载）：距底部还有约两屏可见内容就提前开拉下一批（lookahead，
+    // TVBox/Netflix 类主流做法）——用户滚到底时数据基本已就位，不停在底部干等网络；
     // 每次 +50 条（VM 侧），缓存见底时由仓库向资源站增量续拉，直到该线路全部加载完。
-    // 三元组键入 loadingMore/条数：上一批拉完若仍贴底，条数一变就再触发一轮；
-    // 此前布尔值恒 true 不会重发，短列表（动漫/综艺）滚不动就永远卡死不再加载。
+    // 三元组键入 loadingMore/条数：上一批拉完若仍处预取区，条数一变就再触发下一轮；
+    // 加载完成而状态不变则不重发（防失败后无脑重试风暴）。
     LaunchedEffect(gridState) {
         snapshotFlow {
             val info = gridState.layoutInfo
             val lastVisible = info.visibleItemsInfo.lastOrNull()?.index ?: -1
-            val atBottom = info.totalItemsCount > 0 && lastVisible >= info.totalItemsCount - PREFETCH_ITEMS
-            Triple(atBottom, info.totalItemsCount, loadingMore)
+            val total = info.totalItemsCount
+            // 预取距离 = max(下限, 可见条数×2)：约提前两屏开拉，按实际列数自适应
+            val lookahead = maxOf(PREFETCH_ITEMS, info.visibleItemsInfo.size * 2)
+            val atEdge = total > 0 && lastVisible >= total - lookahead
+            Triple(atEdge, total, loadingMore)
         }
             .distinctUntilChanged()
-            .filter { (atBottom, _, loading) -> atBottom && !loading }
+            .filter { (atEdge, _, loading) -> atEdge && !loading }
             .collect { viewModel.loadMoreItems() }
     }
 
@@ -341,7 +345,7 @@ fun VodScreen(nav: NavHostController) {
 private fun syncCountLabel(count: Int): String =
     if (count < 10_000) count.toString() else "${count / 1000}k"
 
-/** 滚动预取阈值：可见项距底部还差这么多时提前触发下一批加载（约 1~2 行海报） */
+/** 滚动预取距离下限（项数）；实际取 max(此值, 可见条数×2)，约提前两屏开拉（预取式加载） */
 private const val PREFETCH_ITEMS = 8
 
 private fun openDetail(nav: NavHostController, item: VodItemEntity) {

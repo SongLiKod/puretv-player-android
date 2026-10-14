@@ -652,41 +652,72 @@ class VodRepository @Inject constructor(
             var totalPages = paging.totalPages.takeIf { it > 1 } ?: 0 // 0 = 服务端未提供页数，靠空页停止
             var added = 0
             var exhausted = false
+            var fetchFailed = false
             var lastFirstId: String? = null
-            while (added < needed && !exhausted) {
+            while (added < needed && !exhausted && !fetchFailed) {
                 currentCoroutineContext().ensureActive()
-                val dto = fetchDetailPageWithRetry(source, nextPage)
-                if (dto == null) break // 本次失败：保留断点，下次滚动到底再续拉
-                val list = dto.list.orEmpty()
-                // 空页 = 到末页；首页 id 与上一页相同 = 资源站忽略 pg 翻页参数（防死循环）
-                val firstId = list.firstOrNull()?.vodId?.toString()
-                if (list.isEmpty() || (lastFirstId != null && lastFirstId == firstId)) {
+                // 并行波次：一次并发抓 [WAVE_PAGES] 页，再按页序逐页处理入库——
+                // 3 个串行网络往返并成 1 个，一批 50 条的滚动等待约为原来的 1/3
+                //（市面主流的预取式加载：抓下一批与浏览当前批并行）。
+                val wavePages = if (totalPages > 0) {
+                    (nextPage..minOf(nextPage + WAVE_PAGES - 1, totalPages)).toList()
+                } else {
+                    (nextPage until nextPage + WAVE_PAGES).toList()
+                }
+                // 断点页已越过服务端总页数（如预算恰在末页截断）：视作到头，防空波次死循环
+                if (wavePages.isEmpty()) {
                     exhausted = true
                     break
                 }
-                lastFirstId = firstId
-                val entities = ArrayList<VodItemEntity>(list.size)
-                val episodes = ArrayList<VodEpisodeEntity>()
-                var matchedCount = 0
-                list.forEach { item ->
-                    val mapped = mapCmsItem(source, item) ?: return@forEach
-                    entities += mapped.first
-                    episodes += mapped.second
-                    // 持续学习「分类 id → 品类」，下次该标签直接走服务端过滤
-                    rememberCmsType(sourceId, item.typeId, mapped.first.category)
-                    // 计数口径 = 当前标签（选了标签就只认该品类，凑满 needed 条为止）
-                    if (kind.isNullOrBlank() || mapped.first.kind == kind) matchedCount++
+                val wave = coroutineScope {
+                    wavePages.map { p -> async { p to fetchDetailPageWithRetry(source, p) } }.awaitAll()
                 }
-                if (entities.isNotEmpty()) {
-                    vodDao.upsertAll(entities)
-                    if (episodes.isNotEmpty()) vodDao.upsertEpisodes(episodes)
-                    added += matchedCount
+                var stopWave = false
+                for ((pageIndex, dto) in wave) {
+                    if (dto == null) {
+                        // 重试后仍失败：断点停在失败页（不跳页），下次滚动从这里续拉
+                        nextPage = pageIndex
+                        fetchFailed = true
+                        stopWave = true
+                        break
+                    }
+                    val list = dto.list.orEmpty()
+                    // 空页 = 到末页；与上一页首条相同 = 资源站忽略 pg 翻页参数（防死循环）
+                    val firstId = list.firstOrNull()?.vodId?.toString()
+                    if (list.isEmpty() || (lastFirstId != null && lastFirstId == firstId)) {
+                        exhausted = true
+                        stopWave = true
+                        break
+                    }
+                    lastFirstId = firstId
+                    val entities = ArrayList<VodItemEntity>(list.size)
+                    val episodes = ArrayList<VodEpisodeEntity>()
+                    var matchedCount = 0
+                    list.forEach { item ->
+                        val mapped = mapCmsItem(source, item) ?: return@forEach
+                        entities += mapped.first
+                        episodes += mapped.second
+                        // 持续学习「分类 id → 品类」，下次该标签直接走服务端过滤
+                        rememberCmsType(sourceId, item.typeId, mapped.first.category)
+                        // 计数口径 = 当前标签（选了标签就只认该品类，凑满 needed 条为止）
+                        if (kind.isNullOrBlank() || mapped.first.kind == kind) matchedCount++
+                    }
+                    if (entities.isNotEmpty()) {
+                        vodDao.upsertAll(entities)
+                        if (episodes.isNotEmpty()) vodDao.upsertEpisodes(episodes)
+                        added += matchedCount
+                    }
+                    // 只信任 >1 的页数（无 pagecount 的站点按 1 返回，靠空页兜底停止）
+                    val reported = dto.pageInt
+                    if (reported > 1) totalPages = reported
+                    nextPage = pageIndex + 1
+                    if (totalPages > 0 && nextPage > totalPages) {
+                        exhausted = true
+                        stopWave = true
+                        break
+                    }
                 }
-                // 只信任 >1 的页数（无 pagecount 的站点按 1 返回，靠空页兜底停止）
-                val reported = dto.pageInt
-                if (reported > 1) totalPages = reported
-                nextPage++
-                if (totalPages > 0 && nextPage > totalPages) exhausted = true
+                if (stopWave) break
             }
             cmsPaging[sourceId] =
                 if (exhausted) CmsPaging.Exhausted else CmsPaging.Continue(nextPage, totalPages)
@@ -739,50 +770,83 @@ class VodRepository @Inject constructor(
         var added = 0
         var exhausted = false
         var filterBroken = false
+        var fetchFailed = false
         var lastFirstId: String? = null
         var totalPages = 0
-        while (added < needed && !exhausted) {
+        while (added < needed && !exhausted && !filterBroken && !fetchFailed) {
             currentCoroutineContext().ensureActive()
-            val dto = fetchDetailPageWithRetry(source, page, categoryId = typeIds.joinToString(","))
-            if (dto == null) break // 网络失败：保留分类 id 与页码断点，下次滚动重试
-            val list = dto.list.orEmpty()
-            val firstId = list.firstOrNull()?.vodId?.toString()
-            // 空页 = 分类流到末页；连续两页首条相同 = 站点忽略翻页参数（防死循环）
-            if (list.isEmpty() || (lastFirstId != null && lastFirstId == firstId)) {
-                // 首翻就空：本地有该标签内容而 t= 流头部为空 → 过滤没生效（id 学错/不支持）
-                if (list.isEmpty() && freshRun && page == startPage && added == 0) {
-                    filterBroken = true
-                } else {
-                    exhausted = true
+            // 并行波次：一次并发抓 [WAVE_PAGES] 页再按页序处理——凑满一批约 3 页，
+            // 从 3 个串行网络往返降为 1 个（预取式加载，滚动等待约为原来的 1/3）
+            val wavePages = if (totalPages > 0) {
+                (page..minOf(page + WAVE_PAGES - 1, totalPages)).toList()
+            } else {
+                (page until page + WAVE_PAGES).toList()
+            }
+            // 断点页已越过服务端总页数：视作到头，防空波次死循环
+            if (wavePages.isEmpty()) {
+                exhausted = true
+                break
+            }
+            val wave = coroutineScope {
+                wavePages.map { p ->
+                    async { p to fetchDetailPageWithRetry(source, p, categoryId = typeIds.joinToString(",")) }
+                }.awaitAll()
+            }
+            var stopWave = false
+            for ((pageIndex, dto) in wave) {
+                if (dto == null) {
+                    // 网络失败：断点停在失败页（不跳页），保留分类 id，下次滚动重试
+                    page = pageIndex
+                    fetchFailed = true
+                    stopWave = true
+                    break
                 }
-                break
+                val list = dto.list.orEmpty()
+                val firstId = list.firstOrNull()?.vodId?.toString()
+                // 空页 = 分类流到末页；与上一页首条相同 = 站点忽略翻页参数（防死循环）
+                if (list.isEmpty() || (lastFirstId != null && lastFirstId == firstId)) {
+                    // 首翻就空：本地有该标签内容而 t= 流头部为空 → 过滤没生效（id 学错/不支持）
+                    if (list.isEmpty() && freshRun && pageIndex == startPage && added == 0) {
+                        filterBroken = true
+                    } else {
+                        exhausted = true
+                    }
+                    stopWave = true
+                    break
+                }
+                lastFirstId = firstId
+                val entities = ArrayList<VodItemEntity>(list.size)
+                val episodes = ArrayList<VodEpisodeEntity>()
+                var matched = 0
+                list.forEach { item ->
+                    val mapped = mapCmsItem(source, item) ?: return@forEach
+                    entities += mapped.first
+                    episodes += mapped.second
+                    // 服务端 t= 过滤期间也继续学习分类 id（细分小类逐步补齐：日漫/国产动漫…）
+                    rememberCmsType(source.id, item.typeId, mapped.first.category)
+                    if (mapped.first.kind == kind) matched++
+                }
+                if (entities.isNotEmpty()) {
+                    vodDao.upsertAll(entities)
+                    if (episodes.isNotEmpty()) vodDao.upsertEpisodes(episodes)
+                    added += matched
+                }
+                // 整页都不是该标签：服务器忽略了 t= 参数（或分类 id 学错）→ 本流不可用
+                if (list.isNotEmpty() && matched == 0) {
+                    filterBroken = true
+                    stopWave = true
+                    break
+                }
+                val reported = dto.pageInt
+                if (reported > 1) totalPages = reported
+                page = pageIndex + 1
+                if (totalPages > 0 && page > totalPages) {
+                    exhausted = true
+                    stopWave = true
+                    break
+                }
             }
-            lastFirstId = firstId
-            val entities = ArrayList<VodItemEntity>(list.size)
-            val episodes = ArrayList<VodEpisodeEntity>()
-            var matched = 0
-            list.forEach { item ->
-                val mapped = mapCmsItem(source, item) ?: return@forEach
-                entities += mapped.first
-                episodes += mapped.second
-                // 服务端 t= 过滤期间也继续学习分类 id（细分小类逐步补齐：日漫/国产动漫…）
-                rememberCmsType(source.id, item.typeId, mapped.first.category)
-                if (mapped.first.kind == kind) matched++
-            }
-            if (entities.isNotEmpty()) {
-                vodDao.upsertAll(entities)
-                if (episodes.isNotEmpty()) vodDao.upsertEpisodes(episodes)
-                added += matched
-            }
-            // 整页都不是该标签：服务器忽略了 t= 参数（或分类 id 学错）→ 本流不可用
-            if (list.isNotEmpty() && matched == 0) {
-                filterBroken = true
-                break
-            }
-            val reported = dto.pageInt
-            if (reported > 1) totalPages = reported
-            page++
-            if (totalPages > 0 && page > totalPages) exhausted = true
+            if (stopWave) break
         }
         if (filterBroken) {
             // 作废该标签已学的分类 id（大概率是 6.0 双精度串/父分类 id/站点不支持 t=），
@@ -942,6 +1006,33 @@ class VodRepository @Inject constructor(
             ?: totalPages * (firstPage.list?.size?.takeIf { it > 0 } ?: 20)
         // 已入库条数（实际返回并写进缓存的具体数字，不是请求数）
         var written = 0
+        // 并行预取缓冲：翻页决策通过后一次并发抓 [WAVE_PAGES] 页入队，按页序逐页消费——
+        // N 个串行网络往返并成 ⌈N/WAVE_PAGES⌉ 次（首批 100 条从 5 次降为 2 次，
+        // 整源同步同理提速约 3 倍；预取到的页丢弃发生在预算/末页边界，量很小）
+        var pending = emptyList<Pair<Int, CmsVodListDto>>()
+        var pendingIdx = 0
+        var failedAt: Int? = null
+        suspend fun prefetchWave(startPage: Int): List<Pair<Int, CmsVodListDto>> {
+            if (failedAt != null) return emptyList()
+            val wavePages = if (totalPages > 1) {
+                (startPage..minOf(startPage + WAVE_PAGES - 1, totalPages)).toList()
+            } else {
+                (startPage until startPage + WAVE_PAGES).toList()
+            }
+            val results = coroutineScope {
+                wavePages.map { p -> async { p to fetchDetailPageWithRetry(source, p) } }.awaitAll()
+            }
+            val ok = ArrayList<Pair<Int, CmsVodListDto>>(results.size)
+            for ((p, d) in results) {
+                if (d == null) {
+                    // 首个失败页：前面成功页照常消费，消费完再判定中断（断点停在失败页，不跳页）
+                    failedAt = p
+                    break
+                }
+                ok.add(p to d)
+            }
+            return ok
+        }
         while (true) {
             currentCoroutineContext().ensureActive()
             val pageEntities = ArrayList<VodItemEntity>()
@@ -988,16 +1079,22 @@ class VodRepository @Inject constructor(
                 // 整源刷新且服务端没给有效页数：维持旧口径停在第 1 页（预算加载则继续翻页，靠空页/重复页兜底）
                 break
             }
-            page++
-            val next = fetchDetailPageWithRetry(source, page)
-            if (next == null) {
-                // 重试后仍失败：中断但保留已取内容（写库阶段与现有库存比对，避免刷成残缺）
-                fetchFailed = true
-                break
+            // 决策通过：优先出预取队列，空了并发预取下一批（并行化核心：串行往返 → 1 次/批）
+            if (pendingIdx >= pending.size) {
+                pending = prefetchWave(page + 1)
+                pendingIdx = 0
+                if (pending.isEmpty()) {
+                    // 后续页重试后仍失败：中断但保留已取内容（写库阶段与现有库存比对，避免刷成残缺）
+                    fetchFailed = true
+                    break
+                }
             }
-            dto = next
+            val (nextPage, nextDto) = pending[pendingIdx]
+            pendingIdx++
+            page = nextPage
+            dto = nextDto
             // 服务端可能在后续页更新总页数（部分站点首响应给 0/1）
-            val reportedPages = next.pageInt
+            val reportedPages = nextDto.pageInt
             if (reportedPages > 1) totalPages = reportedPages
             // 每 50 页回写一次统计，长任务进行中也能看到片数增长
             if (page % STATS_EVERY_PAGES == 0) {
@@ -1336,6 +1433,13 @@ class VodRepository @Inject constructor(
 
         /** MacCMS 服务端每页条数（冷启动断点丢失时按缓存条数推算已加载页码用） */
         private const val CMS_PAGE_SIZE = 20
+
+        /**
+         * 并行预取波次：一次并发抓取的页数。3 个串行网络往返并成 1 个——
+         * 一批 50 条（3 页）= 1 次往返，首批 100 条（5 页）= 2 次，滚动/刷新等待约降为 1/3。
+         * 取 3 是对吞吐与站点友好度的折中（更高可能触发部分站点限流，失败会走页级重试）。
+         */
+        private const val WAVE_PAGES = 3
 
         /** 同步完成后圈内停留展示「累计总数」的时长（毫秒），随后恢复刷新图标 */
         private const val SYNC_DONE_HOLD_MS = 4_000L
