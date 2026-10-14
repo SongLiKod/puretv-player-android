@@ -127,9 +127,27 @@ class SettingsViewModel @Inject constructor(
 
     fun setSkipOutro(sec: Int) = launchSettings { settingsRepository.setSkipOutroSec(sec) }
 
+    fun setAdFilterEnabled(enabled: Boolean) = launchSettings {
+        settingsRepository.setAdFilterEnabled(enabled)
+    }
+
+    /** 过滤关键词词库（逗号串；空 = 恢复内置默认词库） */
+    fun setAdFilterKeywords(raw: String) = launchSettings {
+        settingsRepository.setAdFilterKeywords(raw)
+    }
+
+    fun setAdVideoFilterEnabled(enabled: Boolean) = launchSettings {
+        settingsRepository.setAdVideoFilterEnabled(enabled)
+    }
+
     /** 插件「跳过片头片尾」安装启用后，播放设置开放片头/片尾跳过配置 */
     val playbackEnhanceInstalled: StateFlow<Boolean> = pluginManager.observeCatalog()
         .map { list -> list.any { it.id == "playback_skip" && it.installed && it.enabled } }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), false)
+
+    /** 插件「过滤广告」安装启用后，播放设置开放过滤广告开关 */
+    val playbackAdFilterInstalled: StateFlow<Boolean> = pluginManager.observeCatalog()
+        .map { list -> list.any { it.id == "playback_adfilter" && it.installed && it.enabled } }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), false)
 
     /* ----------------------------- 播放（5.5 / 5.4） ----------------------------- */

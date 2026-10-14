@@ -287,6 +287,20 @@ interface VodDao {
     @Query("SELECT DISTINCT category FROM vod_items WHERE kind = :kind AND category IS NOT NULL ORDER BY category ASC")
     fun observeCategories(kind: String): Flow<List<String>>
 
+    /** 限定资源站的分类列表（影视页分类行跟随首页所选线路） */
+    @Query(
+        "SELECT DISTINCT category FROM vod_items WHERE kind = :kind AND sourceId = :sourceId " +
+            "AND category IS NOT NULL ORDER BY category ASC"
+    )
+    fun observeCategoriesInSource(kind: String, sourceId: String): Flow<List<String>>
+
+    /** 「全部」品类下限定资源站的分类列表 */
+    @Query(
+        "SELECT DISTINCT category FROM vod_items WHERE sourceId = :sourceId " +
+            "AND category IS NOT NULL ORDER BY category ASC"
+    )
+    fun observeCategoriesInSourceAll(sourceId: String): Flow<List<String>>
+
     /** 一次性品类纠正用读取：有分类名的全部条目 */
     @Query("SELECT * FROM vod_items WHERE category IS NOT NULL AND category != ''")
     suspend fun getAllWithCategory(): List<VodItemEntity>

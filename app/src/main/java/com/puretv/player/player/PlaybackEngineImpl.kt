@@ -49,6 +49,7 @@ import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -90,6 +91,10 @@ class PlaybackEngineImpl @Inject constructor(
     override val preloadProgress: StateFlow<Map<String, Int>> = _preloadProgress.asStateFlow()
 
     private var preloadJob: Job? = null
+
+    /** 片头广告剪切：原地址 → 本地改写播放列表（分片已剪）；及其检测任务 */
+    private val adCutOverrides = mutableMapOf<String, String>()
+    private var adCutJob: Job? = null
 
     /** 统一网络数据源：默认携带当前播放任务的自定义请求头（UA/Referer 等） */
     private val okHttpDataSourceFactory = OkHttpDataSource.Factory(okHttpClient)
@@ -352,12 +357,44 @@ class PlaybackEngineImpl @Inject constructor(
         }
         val startPosition = if (request.mode == PlaybackMode.LIVE) C.TIME_UNSET
         else request.startPositionMs.coerceAtLeast(0L)
-        p.setMediaItem(buildMediaItem(request, backupIndex = 0), startPosition)
         p.setPlaybackParameters(PlaybackParameters(speed))
+        // 片头广告剪切（插件「过滤广告」→ 过滤视频广告）：起播前异步检测 m3u8，
+        // 命中则播放本地改写列表（广告分片已剪），失败/超时/切集一律按原地址起播
+        adCutJob?.cancel()
+        val cutTarget = adCutTarget(request)
+        if (cutTarget == null) {
+            startPlayback(request, p, startPosition)
+        } else {
+            _state.value = _state.value.copy(isBuffering = true)
+            adCutJob = scope.launch {
+                val cutFile = withTimeoutOrNull(M3u8AdCutter.TIMEOUT_MS) {
+                    M3u8AdCutter.cut(cutTarget, request.headers, okHttpClient, context.cacheDir)
+                }
+                // 期间已切集/停止/换播放器则放弃应用
+                if (_currentRequest.value != request || exoPlayer !== p) return@launch
+                if (cutFile != null) adCutOverrides[cutTarget] = cutFile
+                startPlayback(request, p, startPosition)
+            }
+        }
+    }
+
+    /** 写入媒体并起播（普通路径与广告剪切路径共用） */
+    private fun startPlayback(request: PlaybackRequest, p: ExoPlayer, startPosition: Long) {
+        p.setMediaItem(buildMediaItem(request, backupIndex = 0), startPosition)
         p.prepare()
         p.playWhenReady = true
         startPositionLoop()
         schedulePreload(request)
+    }
+
+    /** 片头广告剪切目标：点播 + 开关开启 + m3u8 地址 + 尚未剪切过 */
+    private fun adCutTarget(request: PlaybackRequest): String? {
+        if (request.mode != PlaybackMode.VOD) return null
+        if (!latestSettings.adVideoFilterEnabled) return null
+        val url = request.url
+        if (!url.contains(".m3u8", ignoreCase = true)) return null
+        if (adCutOverrides.containsKey(url)) return null
+        return url
     }
 
     private fun doStop() {
@@ -367,6 +404,8 @@ class PlaybackEngineImpl @Inject constructor(
         statusJob = null
         preloadJob?.cancel()
         preloadJob = null
+        adCutJob?.cancel()
+        adCutJob = null
         val p = exoPlayer
         if (p != null) {
             p.stop()
@@ -486,6 +525,23 @@ class PlaybackEngineImpl @Inject constructor(
             }
 
             override fun onPlayerError(error: PlaybackException) {
+                // 片头广告剪切回退：剪切列表在起播阶段失败（改写异常等）时，
+                // 撤掉剪切改按原地址重试一次，避免误伤源地址失效标记
+                val cuttingRequest = _currentRequest.value
+                val cuttingPlayer = exoPlayer
+                if (cuttingRequest != null && cuttingPlayer != null &&
+                    adCutOverrides.containsKey(cuttingRequest.url) &&
+                    cuttingPlayer.currentPosition < AD_CUT_FALLBACK_MAX_POS_MS
+                ) {
+                    adCutOverrides.remove(cuttingRequest.url)
+                    _state.value = _state.value.copy(isBuffering = true)
+                    cuttingPlayer.setMediaItem(
+                        buildMediaItem(cuttingRequest, backupIndex = 0),
+                        cuttingPlayer.currentPosition,
+                    )
+                    cuttingPlayer.prepare()
+                    return
+                }
                 stallCount += 1
                 attemptedSources.add(backupIndex)
                 val switched = tryAutoSwitch()
@@ -548,8 +604,10 @@ class PlaybackEngineImpl @Inject constructor(
     }
 
     private fun buildMediaItem(request: PlaybackRequest, backupIndex: Int): MediaItem {
-        val url = if (backupIndex <= 0) request.url
+        val base = if (backupIndex <= 0) request.url
         else request.backupUrls.getOrNull(backupIndex - 1) ?: request.url
+        // 片头广告剪切命中时播放本地改写列表（分片已剪且为绝对地址）
+        val url = adCutOverrides[base] ?: base
         val builder = MediaItem.Builder().setUri(url)
         if (extraSubtitles.isNotEmpty()) {
             builder.setSubtitleConfigurations(extraSubtitles)
@@ -1205,6 +1263,9 @@ class PlaybackEngineImpl @Inject constructor(
         const val MSG_STALL_ALL_SOURCES = "网络波动持续，已尝试全部线路，请重试"
 
         private const val STATUS_INTERVAL_MS = 500L
+
+        /** 片头广告剪切回退判定：仅起播阶段（前 10 秒）的失败才撤剪切重试 */
+        private const val AD_CUT_FALLBACK_MAX_POS_MS = 10_000L
         private const val HISTORY_INTERVAL_MS = 5_000L
         private const val SEEK_STEP_MS = 10_000L
 

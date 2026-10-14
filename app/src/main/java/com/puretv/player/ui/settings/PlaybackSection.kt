@@ -13,6 +13,7 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.puretv.player.core.theme.PureTvTheme
 import com.puretv.player.core.ui.InputDialog
+import com.puretv.player.core.util.AdFilter
 import com.puretv.player.data.prefs.AppSettings
 import com.puretv.player.data.prefs.BufferProfile
 import java.util.Locale
@@ -31,6 +32,10 @@ fun PlaybackSection(
     val current = settings ?: return
     val cacheSize by viewModel.cacheSizeLabel.collectAsStateWithLifecycle()
     val brokenMarkCount by viewModel.brokenMarkCount.collectAsStateWithLifecycle()
+    // 跳过片头片尾「自定义」输入弹窗目标（null = 未在输入）
+    var editingSkip by remember { mutableStateOf<SkipField?>(null) }
+    // 过滤关键词编辑弹窗
+    var editingKeywords by remember { mutableStateOf(false) }
     Column(
         modifier = modifier.fillMaxWidth(),
         verticalArrangement = Arrangement.spacedBy(18.dp),
@@ -102,21 +107,92 @@ fun PlaybackSection(
         if (skipPlugin) {
             SettingGroup(
                 title = "跳过片头片尾",
-                subtitle = "点播每集自动执行；片头过短的内容不跳，0=关闭（5.6 易用性）",
+                subtitle = "点播每集自动执行；片头过短的内容不跳，0=关闭，支持自定义秒数（5.6 易用性）",
             ) {
                 OptionSelectorRow(
                     title = "跳过片头",
-                    subtitle = "本集开始自动跳过片头曲（如 60 秒），回看片头不再打断",
-                    options = skipIntroOptions(),
-                    selectedKey = current.skipIntroSec.toString(),
-                    onSelect = { key -> viewModel.setSkipIntro(key.toInt()) },
+                    subtitle = "本集开始自动跳过片头曲，回看不再打断；「自定义」可输入任意秒数",
+                    options = skipOptions(current.skipIntroSec, SKIP_INTRO_PRESETS),
+                    selectedKey = skipSelectedKey(current.skipIntroSec, SKIP_INTRO_PRESETS),
+                    onSelect = { key ->
+                        if (key == "custom") editingSkip = SkipField.INTRO
+                        else viewModel.setSkipIntro(key.toInt())
+                    },
                 )
                 OptionSelectorRow(
                     title = "跳过片尾",
                     subtitle = "剩余时长进入片尾：有下一集直接连播，电影/最后一集跳到结尾",
-                    options = skipOutroOptions(),
-                    selectedKey = current.skipOutroSec.toString(),
-                    onSelect = { key -> viewModel.setSkipOutro(key.toInt()) },
+                    options = skipOptions(current.skipOutroSec, SKIP_OUTRO_PRESETS),
+                    selectedKey = skipSelectedKey(current.skipOutroSec, SKIP_OUTRO_PRESETS),
+                    onSelect = { key ->
+                        if (key == "custom") editingSkip = SkipField.OUTRO
+                        else viewModel.setSkipOutro(key.toInt())
+                    },
+                )
+            }
+
+            editingSkip?.let { field ->
+                val initial = if (field == SkipField.INTRO) current.skipIntroSec else current.skipOutroSec
+                InputDialog(
+                    title = if (field == SkipField.INTRO) "自定义跳过片头" else "自定义跳过片尾",
+                    label = "时长秒数（0-300，0=关闭）",
+                    initialValue = initial.toString(),
+                    placeholder = "秒",
+                    onDone = { text ->
+                        val sec = text.trim().filter { it.isDigit() }.toIntOrNull()
+                        if (sec != null) {
+                            if (field == SkipField.INTRO) viewModel.setSkipIntro(sec)
+                            else viewModel.setSkipOutro(sec)
+                        }
+                        editingSkip = null
+                    },
+                    onDismiss = { editingSkip = null },
+                )
+            }
+        }
+
+        // 过滤广告：由插件「过滤广告」（播放增强类）提供，卸载插件即隐藏并还原关闭
+        val adFilterPlugin by viewModel.playbackAdFilterInstalled.collectAsStateWithLifecycle()
+        if (adFilterPlugin) {
+            SettingGroup(
+                title = "过滤广告",
+                subtitle = "列表按关键词隐藏垃圾条目，视频自动剪掉片头广告（插件提供，5.6 易用性）",
+            ) {
+                SwitchRow(
+                    title = "过滤广告",
+                    subtitle = "开启后隐藏广告推广条目，关闭则显示全部资源",
+                    checked = current.adFilterEnabled,
+                    onCheckedChange = viewModel::setAdFilterEnabled,
+                )
+                SettingRow(
+                    title = "过滤关键词",
+                    subtitle = "标题命中即隐藏；逗号/顿号/换行分隔，清空恢复默认词库",
+                    value = if (AdFilter.isDefaultKeywords(current.adFilterKeywords)) {
+                        "默认（${AdFilter.DEFAULT_KEYWORDS.size} 个）"
+                    } else {
+                        "自定义（${AdFilter.resolveKeywords(current.adFilterKeywords).size} 个）"
+                    },
+                    onClick = { editingKeywords = true },
+                )
+                if (editingKeywords) {
+                    InputDialog(
+                        title = "过滤关键词",
+                        label = "逗号/顿号/换行分隔；留空 = 恢复默认词库",
+                        initialValue = current.adFilterKeywords?.takeIf { it.isNotBlank() }
+                            ?: AdFilter.DEFAULT_KEYWORDS.joinToString(","),
+                        placeholder = "关键词",
+                        onDone = { text ->
+                            viewModel.setAdFilterKeywords(text.trim())
+                            editingKeywords = false
+                        },
+                        onDismiss = { editingKeywords = false },
+                    )
+                }
+                SwitchRow(
+                    title = "过滤视频广告",
+                    subtitle = "播放时自动剪掉片头广告分片（m3u8 资源，起播前约 1 秒检测）",
+                    checked = current.adVideoFilterEnabled,
+                    onCheckedChange = viewModel::setAdVideoFilterEnabled,
                 )
             }
         }
@@ -202,8 +278,8 @@ private fun countdownOptions(): List<Pair<String, String>> = listOf(
     "30" to "30 秒",
 )
 
-/** 跳过片头档位（秒；0=关闭） */
-private fun skipIntroOptions(): List<Pair<String, String>> = listOf(
+/** 跳过片头预设档位（秒；0=关闭） */
+private val SKIP_INTRO_PRESETS = listOf(
     "0" to "关闭",
     "15" to "15 秒",
     "30" to "30 秒",
@@ -212,14 +288,30 @@ private fun skipIntroOptions(): List<Pair<String, String>> = listOf(
     "90" to "90 秒",
 )
 
-/** 跳过片尾档位（秒；0=关闭） */
-private fun skipOutroOptions(): List<Pair<String, String>> = listOf(
+/** 跳过片尾预设档位（秒；0=关闭） */
+private val SKIP_OUTRO_PRESETS = listOf(
     "0" to "关闭",
     "10" to "10 秒",
     "20" to "20 秒",
     "30" to "30 秒",
     "60" to "60 秒",
 )
+
+/** 选中键：命中预设用数值档，否则落回「自定义」项 */
+private fun skipSelectedKey(sec: Int, presets: List<Pair<String, String>>): String =
+    if (presets.any { it.first == sec.toString() }) sec.toString() else "custom"
+
+/** 选项列表：预设档位 + 自定义（当前为非预设值时在标签上标注实际秒数） */
+private fun skipOptions(
+    sec: Int,
+    presets: List<Pair<String, String>>,
+): List<Pair<String, String>> {
+    val label = if (presets.any { it.first == sec.toString() }) "自定义…" else "自定义（$sec 秒）"
+    return presets + ("custom" to label)
+}
+
+/** 跳过片头片尾自定义输入目标 */
+private enum class SkipField { INTRO, OUTRO }
 
 /** 播放缓存上限档位（MB；默认 4GB） */
 private fun cacheLimitOptions(): List<Pair<String, String>> = listOf(

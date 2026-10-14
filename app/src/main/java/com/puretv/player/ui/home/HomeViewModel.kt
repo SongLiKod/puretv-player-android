@@ -2,6 +2,7 @@ package com.puretv.player.ui.home
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.puretv.player.core.util.AdFilter
 import com.puretv.player.data.local.dao.ChannelDao
 import com.puretv.player.data.local.dao.SourceDao
 import com.puretv.player.data.local.dao.VodDao
@@ -11,6 +12,7 @@ import com.puretv.player.data.local.entity.WatchHistoryEntity
 import com.puretv.player.data.model.SourceType
 import com.puretv.player.data.prefs.AppSettings
 import com.puretv.player.data.prefs.SettingsRepository
+import com.puretv.player.data.plugin.PluginManager
 import com.puretv.player.data.repository.FavoritesRepository
 import com.puretv.player.data.repository.HistoryRepository
 import com.puretv.player.data.source.SelectedSourceStore
@@ -41,6 +43,7 @@ class HomeViewModel @Inject constructor(
     private val selectedSourceStore: SelectedSourceStore,
     private val vodRepository: VodRepository,
     private val playbackEngine: PlaybackEngine,
+    private val pluginManager: PluginManager,
 ) : ViewModel() {
 
     val settings: StateFlow<AppSettings?> = settingsRepository.settings
@@ -77,10 +80,21 @@ class HomeViewModel @Inject constructor(
     private val _sourceItems = MutableStateFlow<List<VodItemEntity>>(emptyList())
     val sourceItems: StateFlow<List<VodItemEntity>> = _sourceItems
 
-    /** 对外展示列表：确定性播放失败过的影片自动隐藏（播放成功自动恢复显示） */
+    /** 广告过滤配置（插件「过滤广告」安装且启用 + 设置开启；[first]=是否生效，[second]=用户词库） */
+    private val adFilterSpec: StateFlow<Pair<Boolean, List<String>>> =
+        combine(pluginManager.observeCatalog(), settingsRepository.settings) { catalog, s ->
+            val pluginOn = catalog.any { it.id == "playback_adfilter" && it.installed && it.enabled }
+            (pluginOn && s.adFilterEnabled) to AdFilter.resolveKeywords(s.adFilterKeywords)
+        }
+            .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), false to AdFilter.DEFAULT_KEYWORDS)
+
+    /** 对外展示列表：确定性播放失败过的影片自动隐藏（播放成功自动恢复显示）+ 广告过滤 */
     val visibleSourceItems: StateFlow<List<VodItemEntity>> =
-        combine(_sourceItems, settingsRepository.brokenPlayUrls) { items, broken ->
-            items.filter { item -> item.playUrl == null || item.playUrl !in broken }
+        combine(_sourceItems, settingsRepository.brokenPlayUrls, adFilterSpec) { items, broken, spec ->
+            items.filter { item ->
+                (item.playUrl == null || item.playUrl !in broken) &&
+                    (!spec.first || !AdFilter.isAd(item.title, item.overview, spec.second))
+            }
         }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
 
     /** 当前资源站影片总数（源同步时回写的 channelCount） */

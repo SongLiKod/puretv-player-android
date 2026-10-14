@@ -97,10 +97,15 @@ class PluginsViewModel @Inject constructor(
                 if (presetScale != null && abs(current.fontScale - presetScale) < 0.01f) {
                     settingsRepository.setFontScale(1.0f)
                 }
-                // 播放增强插件卸载：跳过片头片尾配置随插件还原关闭
+                // 播放增强插件卸载：跳过片头片尾/过滤广告配置随插件还原关闭
                 if (id == "playback_skip") {
                     settingsRepository.setSkipIntroSec(0)
                     settingsRepository.setSkipOutroSec(0)
+                }
+                if (id == "playback_adfilter") {
+                    settingsRepository.setAdFilterEnabled(false)
+                    settingsRepository.setAdFilterKeywords(null)
+                    settingsRepository.setAdVideoFilterEnabled(false)
                 }
                 _notice.value = "已卸载：$name"
             } catch (e: kotlinx.coroutines.CancellationException) {

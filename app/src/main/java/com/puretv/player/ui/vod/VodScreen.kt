@@ -91,6 +91,7 @@ fun VodScreen(nav: NavHostController) {
     val error by viewModel.error.collectAsStateWithLifecycle()
     val chartEnabled by viewModel.chartEnabled.collectAsStateWithLifecycle()
     val charts by viewModel.charts.collectAsStateWithLifecycle()
+    val selectedSourceId by viewModel.selectedSourceId.collectAsStateWithLifecycle()
 
     var showSearchDialog by remember { mutableStateOf(false) }
     // 榜单订阅（资源插件 source_chart）：安装启用后标题栏开放榜单入口
@@ -113,6 +114,10 @@ fun VodScreen(nav: NavHostController) {
             runCatching { gridState.scrollToItem(0) }
         }
         wasRefreshing = isRefreshing
+    }
+    // 首页切换资源线路：列表换源清空重载，回到页面顶部衔接视觉
+    LaunchedEffect(selectedSourceId) {
+        runCatching { gridState.scrollToItem(0) }
     }
 
     TvScaffold(
@@ -208,6 +213,7 @@ fun VodScreen(nav: NavHostController) {
                     // 榜单订阅面板（资源插件 source_chart 安装启用后可见）
                     chartActive -> ChartList(
                         charts = charts,
+                        sourceName = selectedSourceId?.let { sourceNames[it] },
                         onOpen = {
                             showCharts = false
                             openDetail(nav, it)
@@ -286,12 +292,22 @@ private fun openDetail(nav: NavHostController, item: VodItemEntity) {
 @Composable
 private fun ChartList(
     charts: ChartLists,
+    sourceName: String?,
     onOpen: (VodItemEntity) -> Unit,
 ) {
     val colors = PureTvTheme.colors
     var topMode by remember { mutableStateOf(false) }
     val list = if (topMode) charts.top else charts.hot
     Column(modifier = Modifier.fillMaxSize()) {
+        // 榜单跟随首页所选资源线路动态聚合（切线路后本面板数据随之变化）
+        Text(
+            text = "基于资源站：${sourceName ?: "全部线路"} · 热播 ${charts.hot.size} 部 · 高分 ${charts.top.size} 部",
+            color = colors.textTertiary,
+            fontSize = 12.sp,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.padding(bottom = 10.dp),
+        )
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.spacedBy(10.dp),
@@ -301,8 +317,8 @@ private fun ChartList(
         }
         if (list.isEmpty()) {
             EmptyState(
-                text = "榜单暂无数据",
-                subtext = "同步影视资源后自动聚合榜单",
+                text = if (topMode) "该线路暂无高分资源" else "该线路暂无榜单数据",
+                subtext = if (topMode) "刮削回填评分（≥6.0）后自动上榜" else "同步该资源线路后自动聚合榜单",
                 modifier = Modifier.padding(top = 48.dp),
             )
         } else {

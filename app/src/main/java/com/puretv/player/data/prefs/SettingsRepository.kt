@@ -79,6 +79,12 @@ data class AppSettings(
     val skipIntroSec: Int = 0,
     /** 跳过片尾（秒，0=关闭）：剩余时长进入片尾窗口直达下一集/结尾 */
     val skipOutroSec: Int = 0,
+    /** 过滤广告：影视列表/搜索/榜单隐藏博彩推广等广告条目（插件「过滤广告」） */
+    val adFilterEnabled: Boolean = false,
+    /** 过滤广告词库（逗号串；null/空 = 使用内置默认词库） */
+    val adFilterKeywords: String? = null,
+    /** 过滤视频广告：播放时剪掉 m3u8 片头广告分片（插件「过滤广告」） */
+    val adVideoFilterEnabled: Boolean = false,
     /** 播放媒体缓存磁盘上限（MB，512..8192；默认 4GB，重启应用生效） */
     val cacheMaxMb: Int = 4096,
     /** 全屏播放底部迷你进度条（常驻细条，直播不显示；默认开） */
@@ -172,11 +178,25 @@ class SettingsRepository @Inject constructor(
     }
 
     suspend fun setSkipIntroSec(sec: Int) = edit {
-        it[KEY_SKIP_INTRO_SEC] = sec.coerceIn(0, 120)
+        it[KEY_SKIP_INTRO_SEC] = sec.coerceIn(0, 300)
     }
 
     suspend fun setSkipOutroSec(sec: Int) = edit {
-        it[KEY_SKIP_OUTRO_SEC] = sec.coerceIn(0, 120)
+        it[KEY_SKIP_OUTRO_SEC] = sec.coerceIn(0, 300)
+    }
+
+    suspend fun setAdFilterEnabled(enabled: Boolean) = edit {
+        it[KEY_AD_FILTER] = enabled
+    }
+
+    suspend fun setAdFilterKeywords(raw: String?) = edit {
+        val normalized = raw?.trim().orEmpty()
+        if (normalized.isEmpty()) it.remove(KEY_AD_FILTER_KEYWORDS)
+        else it[KEY_AD_FILTER_KEYWORDS] = normalized
+    }
+
+    suspend fun setAdVideoFilterEnabled(enabled: Boolean) = edit {
+        it[KEY_AD_VIDEO_FILTER] = enabled
     }
 
     suspend fun setCacheMaxMb(mb: Int) = edit {
@@ -271,6 +291,10 @@ class SettingsRepository @Inject constructor(
         prefs[KEY_NEXT_EP_COUNTDOWN] = s.nextEpisodeCountdownSec
         prefs[KEY_SKIP_INTRO_SEC] = s.skipIntroSec
         prefs[KEY_SKIP_OUTRO_SEC] = s.skipOutroSec
+        prefs[KEY_AD_FILTER] = s.adFilterEnabled
+        if (s.adFilterKeywords != null) prefs[KEY_AD_FILTER_KEYWORDS] = s.adFilterKeywords
+        else prefs.remove(KEY_AD_FILTER_KEYWORDS)
+        prefs[KEY_AD_VIDEO_FILTER] = s.adVideoFilterEnabled
         prefs[KEY_CACHE_MAX_MB] = s.cacheMaxMb
         prefs[KEY_MINI_PROGRESS] = s.miniProgressEnabled
         prefs[KEY_TMDB_KEY] = s.tmdbApiKey
@@ -313,6 +337,9 @@ class SettingsRepository @Inject constructor(
         nextEpisodeCountdownSec = this[KEY_NEXT_EP_COUNTDOWN] ?: 5,
         skipIntroSec = this[KEY_SKIP_INTRO_SEC] ?: 0,
         skipOutroSec = this[KEY_SKIP_OUTRO_SEC] ?: 0,
+        adFilterEnabled = this[KEY_AD_FILTER] ?: false,
+        adFilterKeywords = this[KEY_AD_FILTER_KEYWORDS],
+        adVideoFilterEnabled = this[KEY_AD_VIDEO_FILTER] ?: false,
         cacheMaxMb = this[KEY_CACHE_MAX_MB] ?: 4096,
         miniProgressEnabled = this[KEY_MINI_PROGRESS] ?: true,
         tmdbApiKey = this[KEY_TMDB_KEY] ?: "",
@@ -351,6 +378,9 @@ class SettingsRepository @Inject constructor(
         private val KEY_NEXT_EP_COUNTDOWN = intPreferencesKey("next_ep_countdown_sec")
         private val KEY_SKIP_INTRO_SEC = intPreferencesKey("skip_intro_sec")
         private val KEY_SKIP_OUTRO_SEC = intPreferencesKey("skip_outro_sec")
+        private val KEY_AD_FILTER = booleanPreferencesKey("ad_filter_enabled")
+        private val KEY_AD_FILTER_KEYWORDS = stringPreferencesKey("ad_filter_keywords")
+        private val KEY_AD_VIDEO_FILTER = booleanPreferencesKey("ad_video_filter_enabled")
         private val KEY_CACHE_MAX_MB = intPreferencesKey("cache_max_mb")
         private val KEY_MINI_PROGRESS = booleanPreferencesKey("mini_progress_enabled")
         private val KEY_BROKEN_URLS = stringSetPreferencesKey("broken_play_urls")

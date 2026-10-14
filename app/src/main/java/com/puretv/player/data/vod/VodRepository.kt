@@ -87,12 +87,20 @@ class VodRepository @Inject constructor(
         else -> vodDao.observeByCategory(kind, category)
     }
 
-    /** 观察某品类下的点播分类名（Xtream 分类横滑列表） */
-    fun observeCategories(kind: String?): Flow<List<String>> = when {
-        kind.isNullOrBlank() -> combine(ALL_KINDS.map { vodDao.observeCategories(it) }) { arrays ->
-            arrays.flatMap { it }.distinct().sorted()
+    /**
+     * 观察某品类下的点播分类名（Xtream 分类横滑列表）。
+     * @param sourceId 非空 = 仅该资源站的分类（分类行与影视列表的线路过滤同源）
+     */
+    fun observeCategories(kind: String?, sourceId: String? = null): Flow<List<String>> = when {
+        sourceId.isNullOrBlank() -> when {
+            kind.isNullOrBlank() ->
+                combine(ALL_KINDS.map { vodDao.observeCategories(it) }) { arrays ->
+                    arrays.flatMap { it }.distinct().sorted()
+                }
+            else -> vodDao.observeCategories(kind)
         }
-        else -> vodDao.observeCategories(kind)
+        kind.isNullOrBlank() -> vodDao.observeCategoriesInSourceAll(sourceId)
+        else -> vodDao.observeCategoriesInSource(kind, sourceId)
     }
 
     /** 观察单个影片（一次性读取，刮削回填后由详情页直接更新状态） */
@@ -322,18 +330,27 @@ class VodRepository @Inject constructor(
     /**
      * 刷新点播缓存（IO 协程、可取消、带进度回调，需求 5.3.2/5.4.3）。
      * @param kind 仅刷新指定品类（null = 全部）
+     * @param onlySourceId 仅刷新指定资源站（首页切线路自动同步用；null = 全部线路）
      */
     suspend fun refresh(
         kind: String? = null,
+        onlySourceId: String? = null,
         onProgress: (ImportProgress) -> Unit = {},
     ) = withContext(io) {
-        val sources = sourceDao.getAll()
+        var sources = sourceDao.getAll()
             .filter { it.enabled && (it.type == SourceType.XTREAM || it.type == SourceType.CMS) }
+        if (onlySourceId != null) {
+            sources = sources.filter { it.id == onlySourceId }
+        }
         if (sources.isEmpty()) {
             onProgress(
                 ImportProgress(
                     stage = Stage.FAILED,
-                    message = "未找到已启用的点播源，请先在设置中心添加 Xtream / MacCMS / TVBox 源",
+                    message = if (onlySourceId != null) {
+                        "所选线路无需同步（仅直播源或未启用点播）"
+                    } else {
+                        "未找到已启用的点播源，请先在设置中心添加 Xtream / MacCMS / TVBox 源"
+                    },
                 )
             )
             return@withContext
