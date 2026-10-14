@@ -20,10 +20,10 @@ on:
         type: boolean
         default: false
   push:
-    branches: [main]
+    branches: [master]
     tags: ['v*']
   pull_request:
-    branches: [main]
+    branches: [master]
 
 jobs:
   test:
