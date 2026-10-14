@@ -1067,7 +1067,7 @@ private fun TopInfoBar(state: PlaybackState, request: PlaybackRequest?) {
     ) {
         Column(modifier = Modifier.weight(1f)) {
             Text(
-                text = request?.title ?: "PureTV 播放",
+                text = fullscreenTitle(request),
                 color = colors.textPrimary,
                 fontSize = 22.sp,
                 fontWeight = FontWeight.Medium,
@@ -1852,7 +1852,7 @@ private fun PhonePlayerControls(
                     .padding(start = 4.dp),
             ) {
                 Text(
-                    text = request?.title ?: "PureTV 播放",
+                    text = fullscreenTitle(request),
                     color = Color.White,
                     fontSize = 16.sp,
                     fontWeight = FontWeight.Medium,
@@ -2713,6 +2713,19 @@ private fun OptionListDialog(
 }
 
 /* ================================ 工具 ================================ */
+
+/**
+ * 全屏标题：影视标题后追加当前播放集数（「庆余年 · 第3集」「某片 · 线路2」）。
+ * 直播/回看（频道类）与无集数标记的点播不追加，避免与副标题重复。
+ */
+private fun fullscreenTitle(request: PlaybackRequest?): String {
+    val title = request?.title ?: return "PureTV 播放"
+    val episode = request.episodeLabel
+    if (request.mode != PlaybackMode.VOD || episode.isNullOrBlank()) return title
+    if (request.historyType == "channel") return title
+    if (title.contains(episode)) return title
+    return "$title · $episode"
+}
 
 private fun formatSpeed(bytesPerSecond: Long): String =
     if (bytesPerSecond >= 1_048_576L) {
