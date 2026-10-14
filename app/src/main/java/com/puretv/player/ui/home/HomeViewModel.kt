@@ -134,6 +134,20 @@ class HomeViewModel @Inject constructor(
                 _sourceItems.value = vodDao.getItemsPaged(id, SOURCE_PAGE_SIZE, 0)
             }
         }
+        // 同步进行中每约 2 秒重查第一页：切线路清缓存后主页随服务器数据到达实时增长
+        // （仅列表仍在第一页范围内时刷新，用户深滚后不打断其位置；收尾 refreshTick 仍回第一页）
+        viewModelScope.launch {
+            var lastReloadAt = 0L
+            vodRepository.syncProgress.collect { progress ->
+                if (progress == null) return@collect
+                if (_sourceItems.value.size > SOURCE_PAGE_SIZE) return@collect
+                val id = selectedSourceStore.selectedSourceId.value ?: return@collect
+                val now = System.currentTimeMillis()
+                if (now - lastReloadAt < 2_000L) return@collect
+                lastReloadAt = now
+                _sourceItems.value = vodDao.getItemsPaged(id, SOURCE_PAGE_SIZE, 0)
+            }
+        }
     }
 
     /** 切换资源站：重置列表并加载该站第一页 */
@@ -145,6 +159,10 @@ class HomeViewModel @Inject constructor(
         sourceLoadJob = viewModelScope.launch {
             _sourceItems.value = vodDao.getItemsPaged(sourceId, SOURCE_PAGE_SIZE, 0)
         }
+        // 切线路立即定向同步新线路（用户要求：首页与影视页数据都重新加载）。
+        // 即使影视页从未打开过也会触发；与影视页发起的同目标同步在仓库侧自动去重，
+        // 同步完成后 refreshTick 回调首页重查第一页拿到最新数据，影视页进度转圈同步显示。
+        vodRepository.requestSync(kind = null, onlySourceId = sourceId)
     }
 
     /** 滚动到底部：加载当前资源站下一页影片 */

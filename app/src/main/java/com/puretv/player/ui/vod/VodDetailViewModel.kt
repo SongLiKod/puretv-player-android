@@ -203,11 +203,12 @@ class VodDetailViewModel @Inject constructor(
         }
     }
 
-    /** 失败重试：先同步点播缓存再读取 */
+    /** 失败重试：先定向同步该影片所在线路的缓存再读取（不再全源同步） */
     fun retry() {
         viewModelScope.launch {
+            val item = _item.value
             try {
-                vodRepository.refresh(_item.value?.kind)
+                vodRepository.refresh(kind = item?.kind, onlySourceId = item?.sourceId)
             } catch (e: CancellationException) {
                 throw e
             } catch (t: Throwable) {

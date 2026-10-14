@@ -12,7 +12,10 @@ import com.puretv.player.data.model.VodKind
 import com.puretv.player.di.IoDispatcher
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
@@ -27,7 +30,9 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.onEach
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -63,6 +68,85 @@ class VodRepository @Inject constructor(
     /** 刷新代次（每次点播刷新结束 +1；首页等快照列表据此重查，避免旧条目残留） */
     private val _refreshTick = MutableStateFlow(0L)
     val refreshTick: StateFlow<Long> = _refreshTick.asStateFlow()
+
+    /**
+     * 同步进度（全局唯一）：任一入口（影视页刷新 / 首页切线路）发起的同步都更新这里，
+     * 影视页右上角转圈与圈内「已加载部数」小数字统一读取该状态。
+     */
+    private val _syncProgress = MutableStateFlow<ImportProgress?>(null)
+    val syncProgress: StateFlow<ImportProgress?> = _syncProgress.asStateFlow()
+
+    /** 仓库级同步作用域：同步是应用级任务，不随发起它的界面销毁而中断 */
+    private val syncScope = CoroutineScope(SupervisorJob() + io)
+    private var syncJob: Job? = null
+
+    /** 进行中任务的目标（onlySourceId to kind），用于同目标幂等去重 */
+    @Volatile
+    private var syncTarget: Pair<String?, String?>? = null
+
+    /** 同步代次：重启同步时旧任务的收尾/迟到回调不覆盖新任务的进度 */
+    @Volatile
+    private var syncSeq = 0
+
+    /** 请求中止「完成总数停留展示」（停留期点按转圈取消时立即收起） */
+    @Volatile
+    private var holdAbort = false
+
+    /**
+     * 发起同步（非挂起，任意界面可调）：
+     * - 相同目标（线路 + 品类）进行中 → 幂等跳过（首页与影视页双入口不重复拉取）；
+     * - 目标不同 → 取消进行中的任务并立即按新目标重启；
+     * - 完成后圈内停留展示累计总数（[SYNC_DONE_HOLD_MS]），停留期内可被新请求立刻抢占。
+     */
+    @Synchronized
+    fun requestSync(kind: String?, onlySourceId: String?) {
+        val target = onlySourceId to kind
+        val holdingDone = _syncProgress.value?.stage == Stage.DONE
+        if (syncJob?.isActive == true && syncTarget == target && !holdingDone) return
+        val seq = ++syncSeq
+        syncJob?.cancel()
+        syncTarget = target
+        holdAbort = false
+        syncJob = syncScope.launch {
+            _syncProgress.value = ImportProgress(
+                stage = Stage.PREPARING,
+                message = if (onlySourceId == null) "正在同步点播资源…" else "正在同步所选线路…",
+            )
+            try {
+                refresh(kind = kind, onlySourceId = onlySourceId) { progress ->
+                    if (seq == syncSeq) _syncProgress.value = progress
+                }
+            } finally {
+                // 加载完成：圈内停留展示累计总数几秒再收起（用户要求「加载完显示总数」）。
+                // NonCancellable 保证停留期间任务状态异常也能走完；holdAbort 让转圈点按立即收起；
+                // 代次变化（被新同步抢占）则提前退出。
+                if (seq == syncSeq && _syncProgress.value?.stage == Stage.DONE && !holdAbort) {
+                    val deadline = System.currentTimeMillis() + SYNC_DONE_HOLD_MS
+                    withContext(NonCancellable) {
+                        while (
+                            System.currentTimeMillis() < deadline &&
+                            !holdAbort &&
+                            seq == syncSeq
+                        ) {
+                            delay(150)
+                        }
+                    }
+                }
+                // 停留期间可能已启动新同步（代次变化）：二次校验避免误清新任务的进度
+                if (seq == syncSeq) {
+                    _syncProgress.value = null
+                    syncTarget = null
+                }
+            }
+        }
+    }
+
+    /** 取消进行中的同步（影视页转圈点按取消；完成停留展示期点按则立即收起） */
+    @Synchronized
+    fun cancelSync() {
+        holdAbort = true
+        syncJob?.cancel()
+    }
 
     private val episodeMutex = Mutex()
 
@@ -358,17 +442,39 @@ class VodRepository @Inject constructor(
         onProgress(ImportProgress(stage = Stage.PREPARING, message = "正在同步点播资源…"))
         var totalSaved = 0
         var anyFailure = false
+        // 圈内显示值（只增不减）：跨线路累加（第 1 线 20 部 + 第 2 线 20 部 → 圈里显示 40），
+        // TMDB 刮削等以索引上报进度的阶段不回落，同步结束停在累计总数
+        var displayedCount = 0
+        fun report(p: ImportProgress, offset: Int = 0) {
+            displayedCount = maxOf(displayedCount, offset + p.processed)
+            onProgress(p.copy(processed = displayedCount))
+        }
         try {
             sources.forEach { source ->
+                // 切线路硬刷新（用户要求）：先清空该线路的本地缓存（影片/分集/统计），
+                // 主页与影视页随之清空，本次同步只展示从服务器重新拉回的数据
+                if (onlySourceId != null) {
+                    vodDao.deleteBySource(source.id)
+                    vodDao.deleteEpisodesBySource(source.id)
+                    sourceDao.updateStats(
+                        id = source.id,
+                        channelCount = 0,
+                        groupCount = 0,
+                        syncedAt = 0,
+                    )
+                }
+                // 偏移 = 已完成线路的写入片数：新线路的进度在此基础上继续累加
+                val offset = totalSaved
+                val sourceReport: (ImportProgress) -> Unit = { p -> report(p, offset) }
                 val saved = if (source.type == SourceType.CMS) {
-                    refreshCmsSource(source, kind, onProgress) { anyFailure = true }
+                    refreshCmsSource(source, kind, sourceReport) { anyFailure = true }
                 } else {
-                    refreshXtreamSource(source, kind, onProgress) { anyFailure = true }
+                    refreshXtreamSource(source, kind, sourceReport) { anyFailure = true }
                 }
                 totalSaved += saved
             }
             lastRefreshAt = System.currentTimeMillis()
-            onProgress(
+            report(
                 ImportProgress(
                     stage = Stage.DONE,
                     processed = totalSaved,
@@ -411,6 +517,8 @@ class VodRepository @Inject constructor(
             onProgress(ImportProgress(stage = Stage.FAILED, message = "「${source.name}」连接失败"))
             return 0
         }
+        // 点播列表是单次大请求（可能数十秒）：先报「下载中」，避免长等待期间无任何动静
+        onProgress(ImportProgress(stage = Stage.DOWNLOADING, message = "正在下载「${source.name}」点播列表…"))
         val streams = try {
             xtreamClient.fetchStreams(source)
         } catch (e: CancellationException) {
@@ -422,6 +530,19 @@ class VodRepository @Inject constructor(
         }
         val total = streams.size
         val items = ArrayList<VodItemEntity>(total)
+        // 解析即入库：影视页海报墙随同步实时增长（与 CMS 逐页入库同口径），不再等整源解析完才写
+        var written = 0
+        val pending = ArrayList<VodItemEntity>()
+        suspend fun flushPending() {
+            if (pending.isEmpty()) return
+            // 与收尾 matched 同口径过滤（kind 参数），入库数 == 最终写入数
+            val chunk =
+                if (kind.isNullOrBlank()) pending.toList() else pending.filter { it.kind == kind }
+            pending.clear()
+            if (chunk.isEmpty()) return
+            vodDao.upsertAll(chunk)
+            written += chunk.size
+        }
         streams.forEachIndexed { index, stream ->
             val streamId = stream.idString ?: return@forEachIndexed
             val title = stream.name?.trim().takeUnless { it.isNullOrEmpty() } ?: return@forEachIndexed
@@ -431,7 +552,7 @@ class VodRepository @Inject constructor(
             val playUrl = stream.directSource?.takeIf { it.isNotBlank() }
                 ?: xtreamClient.playUrl(source, streamId, stream.containerExtension, isSeries)
             if (playUrl != null) {
-                items += VodItemEntity(
+                val entity = VodItemEntity(
                     sourceId = source.id,
                     id = streamId,
                     title = title,
@@ -442,18 +563,23 @@ class VodRepository @Inject constructor(
                     playUrl = if (isSeries) null else playUrl,
                     updatedAt = stream.addedAtMs.takeIf { it > 0L } ?: System.currentTimeMillis(),
                 )
+                items += entity
+                pending += entity
             }
-            if (index % 400 == 0) {
+            if (pending.size >= 200) flushPending()
+            // 每 200 条上报一次：数字 = 已入库条数（服务器返回且实际可用的影视条目数）
+            if (index % 200 == 0) {
                 onProgress(
                     ImportProgress(
                         stage = Stage.PARSING,
-                        processed = index,
+                        processed = written,
                         total = total,
                         message = "正在解析「${source.name}」点播列表…",
                     )
                 )
             }
         }
+        flushPending()
         val matched = if (kind.isNullOrBlank()) items else items.filter { it.kind == kind }
         onProgress(
             ImportProgress(
@@ -463,11 +589,9 @@ class VodRepository @Inject constructor(
                 message = "正在写入「${source.name}」缓存…",
             )
         )
-        vodDao.deleteBySource(source.id)
-        matched.chunked(DB_CHUNK).forEach { chunk ->
-            currentCoroutineContext().ensureActive()
-            vodDao.upsertAll(chunk)
-        }
+        // 事务内全量收口（与 CMS 同口径）：解析期间已增量入库，这里原子替换掉服务器已下架的旧条目；
+        // 事务保证替换期间海报墙不出现「清空 → 重填」的空窗闪烁
+        vodDao.replaceSource(source.id, matched)
         // 回写源统计（设置页「X 部影片」与同步时间）
         sourceDao.updateStats(
             id = source.id,
@@ -506,14 +630,39 @@ class VodRepository @Inject constructor(
         var page = 1
         var dto = firstPage
         var fetchFailed = false
+        // 圈内小数字要显示「已加载部数」：总长按资源站返回的总条数估算，接口没给就按页数×每页条数
+        val estimatedTotal = firstPage.totalInt.takeIf { it > 0 }
+            ?: totalPages * (firstPage.list?.size?.takeIf { it > 0 } ?: 20)
+        // 已入库条数（实际返回并写进缓存的具体数字，不是请求数）
+        var written = 0
         while (true) {
             currentCoroutineContext().ensureActive()
+            val pageEntities = ArrayList<VodItemEntity>()
             dto.list.orEmpty().forEach { item ->
                 val mapped = mapCmsItem(source, item) ?: return@forEach
                 val (entity, allEpisodes) = mapped
                 items += entity
                 if (allEpisodes.isNotEmpty()) episodes[entity.id] = allEpisodes
+                // 与收尾 matched 同口径过滤，保证入库数 == 最终写入数
+                if (kind.isNullOrBlank() || entity.kind == kind) pageEntities += entity
             }
+            // 逐页立即入库：影视页海报墙随同步实时增长（Room Flow 自动刷新），不再等整源拉完才变
+            if (pageEntities.isNotEmpty()) {
+                vodDao.upsertAll(pageEntities)
+                written += pageEntities.size
+                // 分集随页写入：同步期间点开新剧集详情也能直接看到分集
+                val pageEpisodes = pageEntities.flatMap { e -> episodes[e.id].orEmpty() }
+                if (pageEpisodes.isNotEmpty()) vodDao.upsertEpisodes(pageEpisodes)
+            }
+            // 圈内数字 = 已入库条数（返回来的真实数字），实时上报
+            onProgress(
+                ImportProgress(
+                    stage = Stage.PARSING,
+                    processed = written,
+                    total = estimatedTotal,
+                    message = "正在同步「${source.name}」第 $page/$totalPages 页…",
+                )
+            )
             if (page >= totalPages || dto.list.isNullOrEmpty()) break
             page++
             val next = fetchDetailPageWithRetry(source, page)
@@ -523,14 +672,6 @@ class VodRepository @Inject constructor(
                 break
             }
             dto = next
-            onProgress(
-                ImportProgress(
-                    stage = Stage.PARSING,
-                    processed = page,
-                    total = totalPages,
-                    message = "正在同步「${source.name}」第 $page/$totalPages 页…",
-                )
-            )
             // 每 50 页回写一次统计，长任务进行中也能看到片数增长
             if (page % STATS_EVERY_PAGES == 0) {
                 sourceDao.updateStats(
@@ -821,6 +962,9 @@ class VodRepository @Inject constructor(
 
         /** 同步途中回写统计的页间隔（长任务进行中也能看到片数增长） */
         private const val STATS_EVERY_PAGES = 50
+
+        /** 同步完成后圈内停留展示「累计总数」的时长（毫秒），随后恢复刷新图标 */
+        private const val SYNC_DONE_HOLD_MS = 4_000L
 
         /** 单次刷新 TMDB 刮削条目上限（保证刷新时长可控） */
         private const val MAX_SCRAPES_PER_REFRESH = 200

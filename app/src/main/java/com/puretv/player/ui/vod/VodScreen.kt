@@ -7,6 +7,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -88,7 +89,6 @@ fun VodScreen(nav: NavHostController) {
     val sourceNames by viewModel.sourceNames.collectAsStateWithLifecycle()
     val refreshProgress by viewModel.refreshProgress.collectAsStateWithLifecycle()
     val hasSources by viewModel.hasSources.collectAsStateWithLifecycle()
-    val error by viewModel.error.collectAsStateWithLifecycle()
     val chartEnabled by viewModel.chartEnabled.collectAsStateWithLifecycle()
     val charts by viewModel.charts.collectAsStateWithLifecycle()
     val selectedSourceId by viewModel.selectedSourceId.collectAsStateWithLifecycle()
@@ -98,8 +98,8 @@ fun VodScreen(nav: NavHostController) {
     var showCharts by remember { mutableStateOf(false) }
 
     val isRefreshing = refreshProgress != null
-    val syncMessage = error
-        ?: refreshProgress?.takeIf { it.stage == ImportProgress.Stage.FAILED }?.message
+    // 同步失败信息随进度透传（仓库在失败节点发出 FAILED 进度，完成即清空）
+    val syncMessage = refreshProgress?.takeIf { it.stage == ImportProgress.Stage.FAILED }?.message
     val searchActive = !searchQuery.isNullOrBlank()
     val chartActive = showCharts && !searchActive
 
@@ -150,11 +150,24 @@ fun VodScreen(nav: NavHostController) {
             }
             if (isRefreshing) {
                 IconButton(onClick = viewModel::cancelRefresh) {
-                    CircularProgressIndicator(
-                        modifier = Modifier.size(18.dp),
-                        color = colors.highlight,
-                        strokeWidth = 2.dp,
-                    )
+                    // 圈内小数字 = 已加载部数（同步实时累加）：转圈不再"干转"，一眼看出进度
+                    Box(contentAlignment = Alignment.Center, modifier = Modifier.size(18.dp)) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.fillMaxSize(),
+                            color = colors.highlight,
+                            strokeWidth = 2.dp,
+                        )
+                        val loaded = refreshProgress?.processed ?: 0
+                        if (loaded > 0) {
+                            val label = syncCountLabel(loaded)
+                            Text(
+                                text = label,
+                                color = colors.highlight,
+                                fontSize = if (label.length >= 4) 6.sp else 7.5.sp,
+                                maxLines = 1,
+                            )
+                        }
+                    }
                 }
             } else {
                 IconButton(onClick = viewModel::refresh) {
@@ -183,6 +196,23 @@ fun VodScreen(nav: NavHostController) {
                     onCategorySelect = viewModel::selectCategory,
                     modifier = Modifier.padding(top = if (portrait) 10.dp else 14.dp),
                 )
+            }
+            // 同步状态行（追加需求：转圈之外要「眼见为实」）：
+            // 实时显示 第X/Y页 · 已入库N部，完成后显示总数；海报墙随入库逐页实时增长
+            if (isRefreshing) {
+                refreshProgress?.let { p ->
+                    val detail = if (p.processed > 0 && p.stage != ImportProgress.Stage.DONE) {
+                        " · 已入库 ${p.processed} 部"
+                    } else {
+                        ""
+                    }
+                    Text(
+                        text = (p.message.orEmpty() + detail).trim(),
+                        color = colors.textSecondary,
+                        fontSize = 12.sp,
+                        modifier = Modifier.padding(top = 6.dp),
+                    )
+                }
             }
             // 同步不再占用页面空间（追加需求：不显示加载站点的大块提示）；
             // 同步状态由标题旁的小圈表示，失败时仅一行小字提示。
@@ -283,6 +313,10 @@ fun VodScreen(nav: NavHostController) {
         )
     }
 }
+
+/** 同步转圈内的小数字标签：<1 万显示原数，更大折算 12k / 123k 形式保证 18dp 圈内放得下 */
+private fun syncCountLabel(count: Int): String =
+    if (count < 10_000) count.toString() else "${count / 1000}k"
 
 private fun openDetail(nav: NavHostController, item: VodItemEntity) {
     nav.navigate(Routes.vodDetail(item.sourceId, item.id))

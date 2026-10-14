@@ -336,6 +336,10 @@ interface VodDao {
 
     @Query("SELECT * FROM vod_episodes WHERE seriesId = :seriesId ORDER BY season ASC, episode ASC")
     suspend fun episodes(seriesId: String): List<VodEpisodeEntity>
+
+    /** 按资源站删除分集（切线路硬刷新：清空缓存后全部重新从服务器获取） */
+    @Query("DELETE FROM vod_episodes WHERE sourceId = :sourceId")
+    suspend fun deleteEpisodesBySource(sourceId: String)
 }
 
 /** 按品类统计（首页/分类角标用） */

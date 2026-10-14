@@ -2,6 +2,7 @@ package com.puretv.player.data.vod
 
 import com.squareup.moshi.Json
 import com.squareup.moshi.JsonClass
+import kotlin.math.floor
 
 /**
  * MacCMS 采集协议 DTO（苹果 CMS「api.php/provide/vod」JSON 接口）。
@@ -18,8 +19,24 @@ data class CmsVodListDto(
     @Json(name = "total") val total: Any? = null,
     @Json(name = "list") val list: List<CmsVodItemDto>? = null,
 ) {
-    val pageInt: Int get() = pageCount?.toString()?.toIntOrNull() ?: 1
-    val totalInt: Int get() = total?.toString()?.toIntOrNull() ?: 0
+    val pageInt: Int get() = pageCount.toIntOrDefault(1)
+    val totalInt: Int get() = total.toIntOrDefault(0)
+}
+
+/**
+ * Any? 数值 → Int（MacCMS 分页字段专用）。
+ *
+ * Moshi 把 JSON 数字统一解析为 Double（`pagecount:7919` → `7919.0`），直接 `toString()`
+ * 会得到 "7919.0" 令 `toIntOrNull()` 失败 → 总页数被误判为 1 → 整源同步只拉第 1 页
+ * （每条线路只加载 20 部）。这里兼容三种形态：
+ * Double/Float 整值（7919.0 → 7919）、其他 Number、以及 "7919" / "7919.0" 字符串。
+ */
+private fun Any?.toIntOrDefault(default: Int): Int = when (this) {
+    null -> default
+    is Double -> if (isFinite() && this == floor(this)) toInt() else default
+    is Float -> if (isFinite() && this == floor(this)) toInt() else default
+    is Number -> toInt()
+    else -> toString().trim().substringBefore('.').toIntOrNull() ?: default
 }
 
 @JsonClass(generateAdapter = true)

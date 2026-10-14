@@ -228,19 +228,13 @@ class VodViewModel @Inject constructor(
     private val _onlineSearching = MutableStateFlow(false)
     val onlineSearching: StateFlow<Boolean> = _onlineSearching
 
-    /** 同步进度（null = 空闲；界面显示进度条且保持可操作） */
-    private val _refreshProgress = MutableStateFlow<ImportProgress?>(null)
-    val refreshProgress: StateFlow<ImportProgress?> = _refreshProgress
+    /**
+     * 同步进度（null = 空闲）：进度由 VodRepository 统一持有——
+     * 首页切线路与影视页刷新任一入口发起的同步都会实时反映到影视页转圈上。
+     */
+    val refreshProgress: StateFlow<ImportProgress?> = vodRepository.syncProgress
 
-    /** 同步错误（异常抛出场景） */
-    private val _error = MutableStateFlow<String?>(null)
-    val error: StateFlow<String?> = _error
-
-    private var refreshJob: Job? = null
     private var onlineSearchJob: Job? = null
-
-    /** 刷新代次：切线路重启同步时，旧任务的收尾不覆盖新任务的进度/错误 */
-    private var refreshSeq = 0
 
     init {
         viewModelScope.launch {
@@ -262,7 +256,7 @@ class VodViewModel @Inject constructor(
                     .firstOrNull()
                 if (first != null) selectedSourceStore.select(first.id)
             }
-            // 打开页面自动同步（智能追更），缓存新鲜时跳过
+            // 打开页面自动同步（智能追更）：只定向刷新首页所选线路的全部影视，缓存新鲜时跳过
             val hasSourcesNow = try {
                 vodRepository.hasVodSources()
             } catch (e: CancellationException) {
@@ -331,54 +325,29 @@ class VodViewModel @Inject constructor(
         _onlineSearching.value = false
     }
 
-    /** 手动刷新（可取消，进度回调在 IO 协程发出；全源同步，供跨线路搜索与聚合使用） */
-    fun refresh() {
-        if (refreshJob?.isActive == true) return
-        startRefresh(onlySourceId = null)
-    }
-
     /**
-     * 定向同步：取消进行中的同步，只拉取目标线路（首页切线路的自动刷新）。
-     * @param seq 代次守卫：旧任务被取消时的 finally/错误不覆盖新任务的进度与错误状态
+     * 手动刷新：只定向同步「首页所选线路」——点播页仅加载切换线路的全部影视，
+     * 不再逐条线路都同步一遍（旧行为每条线路各拉一页，只出现 20 部）。
+     * 跨线路搜索由 searchOnline 实时向资源站检索，不依赖把所有线路拉进缓存。
      */
-    private fun startRefresh(onlySourceId: String?) {
-        val seq = ++refreshSeq
-        refreshJob?.cancel()
-        _error.value = null
-        refreshJob = viewModelScope.launch {
-            _refreshProgress.value = ImportProgress(
-                stage = ImportProgress.Stage.PREPARING,
-                message = if (onlySourceId == null) "正在同步点播资源…" else "正在同步所选线路…",
-            )
-            try {
-                vodRepository.refresh(
-                    kind = selectedKind.value,
-                    onlySourceId = onlySourceId,
-                ) { progress ->
-                    if (seq == refreshSeq) _refreshProgress.value = progress
-                }
-            } catch (e: CancellationException) {
-                throw e
-            } catch (t: Throwable) {
-                if (seq == refreshSeq) _error.value = t.message ?: "同步失败，请稍后重试"
-            } finally {
-                if (seq == refreshSeq) _refreshProgress.value = null
-            }
-        }
+    fun refresh() {
+        vodRepository.requestSync(
+            kind = selectedKind.value,
+            onlySourceId = selectedSourceStore.selectedSourceId.value,
+        )
     }
 
-    /** 首页切换资源线路：影视页清空旧线路视图（筛选/搜索/错误），并定向同步新线路 */
+    /** 首页切换资源线路：影视页清空旧线路视图（筛选/搜索），并定向同步新线路（与首页发起的同目标同步去重） */
     private fun onSourceSwitched(sourceId: String?) {
         selectedKind.value = null
         selectedCategory.value = null
         clearSearch()
-        _error.value = null
-        startRefresh(onlySourceId = sourceId)
+        vodRepository.requestSync(kind = selectedKind.value, onlySourceId = sourceId)
     }
 
     /** 取消同步 */
     fun cancelRefresh() {
-        refreshJob?.cancel()
+        vodRepository.cancelSync()
     }
 
     companion object {

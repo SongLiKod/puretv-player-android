@@ -73,6 +73,12 @@ android {
     testOptions {
         unitTests.isReturnDefaultValues = true
     }
+
+    lint {
+        // 本地离线打包可加 -PskipLintVital 跳过 Release 的 lintVital 门禁
+        // （离线缓存缺 lint 依赖时会失败；CI 有网可正常执行，不受影响）
+        checkReleaseBuilds = !project.hasProperty("skipLintVital")
+    }
 }
 
 dependencies {
@@ -136,3 +142,6 @@ dependencies {
     androidTestImplementation(libs.androidx.room.testing)
     debugImplementation(libs.androidx.compose.ui.tooling)
 }
+
+// 本地 Release 签名（signing.gradle 存在时启用；不入库。CI 有 secrets 时会覆盖该文件并另行 apply）
+if (file("signing.gradle").exists()) apply(from = "signing.gradle")

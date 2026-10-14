@@ -1,0 +1,16 @@
+// 本地 Release 签名配置（local-release.jks / 本文件均不入库；CI 有密钥时会覆盖本文件）
+android {
+    signingConfigs {
+        release {
+            storeFile rootProject.file("app/local-release.jks")
+            storePassword "puretv-local"
+            keyAlias "puretv"
+            keyPassword "puretv-local"
+        }
+    }
+    buildTypes {
+        release {
+            signingConfig signingConfigs.getByName("release")
+        }
+    }
+}
