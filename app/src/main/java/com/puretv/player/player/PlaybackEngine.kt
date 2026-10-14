@@ -121,6 +121,8 @@ data class PlaybackState(
     val qualityLabel: String? = null,
     /** 是否处于弱网提示状态 */
     val weakNetwork: Boolean = false,
+    /** 视频广告过滤提示（已过滤/不支持/检测失败/超时；null = 无提示） */
+    val adCutNotice: String? = null,
 )
 
 /**

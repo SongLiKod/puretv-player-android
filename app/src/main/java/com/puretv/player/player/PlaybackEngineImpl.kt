@@ -358,8 +358,8 @@ class PlaybackEngineImpl @Inject constructor(
         val startPosition = if (request.mode == PlaybackMode.LIVE) C.TIME_UNSET
         else request.startPositionMs.coerceAtLeast(0L)
         p.setPlaybackParameters(PlaybackParameters(speed))
-        // 片头广告剪切（插件「过滤广告」→ 过滤视频广告）：起播前异步检测 m3u8，
-        // 命中则播放本地改写列表（广告分片已剪），失败/超时/切集一律按原地址起播
+        // 视频内广告剪切（插件「过滤广告」→ 过滤视频广告）：起播前异步检测播放列表
+        // （含 master 多清晰度/加密清单），命中则播本地改写列表，失败/超时/切集按原地址起播
         adCutJob?.cancel()
         val cutTarget = adCutTarget(request)
         if (cutTarget == null) {
@@ -367,14 +367,37 @@ class PlaybackEngineImpl @Inject constructor(
         } else {
             _state.value = _state.value.copy(isBuffering = true)
             adCutJob = scope.launch {
-                val cutFile = withTimeoutOrNull(M3u8AdCutter.TIMEOUT_MS) {
+                val result = withTimeoutOrNull(M3u8AdCutter.TIMEOUT_MS) {
                     M3u8AdCutter.cut(cutTarget, request.headers, okHttpClient, context.cacheDir)
                 }
                 // 期间已切集/停止/换播放器则放弃应用
                 if (_currentRequest.value != request || exoPlayer !== p) return@launch
-                if (cutFile != null) adCutOverrides[cutTarget] = cutFile
+                _state.value = _state.value.copy(adCutNotice = adCutNoticeFor(result))
+                if (result is AdCutResult.Applied) {
+                    adCutOverrides[cutTarget] = result.localUrl
+                    pruneAdCutOverrides()
+                }
                 startPlayback(request, p, startPosition)
             }
+        }
+    }
+
+    /** 剪切结果 → 控制层提示（null = 静默按原地址播放，不打扰） */
+    private fun adCutNoticeFor(result: AdCutResult?): String? = when (result) {
+        null -> "广告检测超时"
+        is AdCutResult.Applied -> "已过滤广告 ${result.cutSeconds} 秒"
+        is AdCutResult.Failed -> "广告检测失败"
+        AdCutResult.NotApplicable -> "该资源不支持视频广告过滤"
+        AdCutResult.NoAds -> null
+    }
+
+    /** 本地剪切列表按先进先出淘汰，防缓存文件无限增长 */
+    private fun pruneAdCutOverrides() {
+        while (adCutOverrides.size > MAX_AD_CUT_OVERRIDES) {
+            val iterator = adCutOverrides.entries.iterator()
+            val eldest = iterator.next()
+            iterator.remove()
+            runCatching { File(Uri.parse(eldest.value).path.orEmpty()).delete() }
         }
     }
 
@@ -387,12 +410,11 @@ class PlaybackEngineImpl @Inject constructor(
         schedulePreload(request)
     }
 
-    /** 片头广告剪切目标：点播 + 开关开启 + m3u8 地址 + 尚未剪切过 */
+    /** 视频广告剪切目标：点播 + 开关开启 + 尚未剪切过（是否 HLS 由检测器嗅探判定） */
     private fun adCutTarget(request: PlaybackRequest): String? {
         if (request.mode != PlaybackMode.VOD) return null
         if (!latestSettings.adVideoFilterEnabled) return null
         val url = request.url
-        if (!url.contains(".m3u8", ignoreCase = true)) return null
         if (adCutOverrides.containsKey(url)) return null
         return url
     }
@@ -1263,6 +1285,9 @@ class PlaybackEngineImpl @Inject constructor(
         const val MSG_STALL_ALL_SOURCES = "网络波动持续，已尝试全部线路，请重试"
 
         private const val STATUS_INTERVAL_MS = 500L
+
+        /** 本地广告剪切列表缓存上限（超出按先进先出删除文件） */
+        private const val MAX_AD_CUT_OVERRIDES = 8
 
         /** 片头广告剪切回退判定：仅起播阶段（前 10 秒）的失败才撤剪切重试 */
         private const val AD_CUT_FALLBACK_MAX_POS_MS = 10_000L

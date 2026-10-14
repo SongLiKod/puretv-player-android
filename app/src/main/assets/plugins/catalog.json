@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
-  "updatedAt": 1791996000000,
-  "checksum": "e7e53df0a5601adcb6a70cd5e87c25043cb1852c4cefdbbe0e291ac01c9cf394",
+  "updatedAt": 1792050000000,
+  "checksum": "a4770d7e781d0c3ac963560edbd4e2356af794ce7fc11b0ce1ba57d12fa81adf",
   "note": "PureTV 官方插件目录：仅收录官方审核上架（official=true）插件。sha256 为插件描述串（id|type|version|name|description）的 SHA-256 摘要，安装时逐条校验；checksum 为全部条目摘要的二次汇总校验。",
   "plugins": [
     {
@@ -169,11 +169,11 @@
     {
       "id": "playback_adfilter",
       "name": "过滤广告",
-      "description": "可配置关键词隐藏列表广告，自动剪切视频片头广告",
+      "description": "可配置关键词过滤列表广告，剪切视频片头与中插广告",
       "type": "playback",
-      "version": "1.1.0",
+      "version": "1.2.0",
       "official": true,
-      "sha256": "f3bfcc073ecb3910b42d77102b54df7290137809eb9c4acd09ab780e0ba02e0c"
+      "sha256": "09ca6b0ad47209b6bed7ff803eba4ea872e35907fcdea7587e45d74653f1194d"
     }
   ]
 }

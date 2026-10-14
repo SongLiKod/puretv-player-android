@@ -58,6 +58,7 @@ import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PictureInPicture
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Replay10
+import androidx.compose.material.icons.filled.ScreenRotation
 import androidx.compose.material.icons.filled.SkipNext
 import androidx.compose.material.icons.filled.SkipPrevious
 import androidx.compose.material.icons.filled.Speed
@@ -300,6 +301,8 @@ fun PlaybackScreen(nav: NavHostController) {
     val isTv = remember(context) { DeviceUtils.isTvDevice(context) }
     // 手机全屏态：默认竖屏播放（视频在上、控制在下），点「全屏」才转横屏沉浸播放
     var fullscreen by rememberSaveable { mutableStateOf(false) }
+    // 全屏内旋转屏幕（短剧等竖屏内容）：锁定竖屏让竖屏视频满屏，退出全屏自动复位
+    var rotatePortrait by rememberSaveable { mutableStateOf(false) }
 
     // 需求 5.1/6.1：播放页保持屏幕常亮；退出时写记录并停止。
     // 手机端默认竖屏播放，进入/退出全屏切换横竖屏；退出播放恢复原方向。TV 本身恒为横屏不受影响。
@@ -320,11 +323,16 @@ fun PlaybackScreen(nav: NavHostController) {
     LaunchedEffect(Unit) { viewModel.exitFloatMode() }
 
     if (activity != null && !isTv) {
-        LaunchedEffect(fullscreen) {
-            if (fullscreen) {
-                DeviceUtils.lockLandscape(activity)
-            } else {
-                DeviceUtils.lockPortrait(activity)
+        LaunchedEffect(fullscreen, rotatePortrait) {
+            when {
+                // 退出全屏：复位旋转标记，回播放页默认竖屏
+                !fullscreen -> {
+                    rotatePortrait = false
+                    DeviceUtils.lockPortrait(activity)
+                }
+                // 全屏 + 旋转：锁竖屏，竖屏短剧按原始分辨率满屏显示
+                rotatePortrait -> DeviceUtils.lockPortrait(activity)
+                else -> DeviceUtils.lockLandscape(activity)
             }
         }
     }
@@ -777,6 +785,11 @@ fun PlaybackScreen(nav: NavHostController) {
                         },
                         onPrevEpisode = { stepEpisode(-1) },
                         onNextEpisode = { stepEpisode(1) },
+                        portraitLocked = rotatePortrait,
+                        onRotate = {
+                            poke()
+                            rotatePortrait = !rotatePortrait
+                        },
                         onFloat = enterFloatOrRequestPermission,
                         onStop = { exit() },
                     )
@@ -1091,6 +1104,17 @@ private fun TopInfoBar(state: PlaybackState, request: PlaybackRequest?) {
                     .padding(horizontal = 12.dp, vertical = 5.dp),
             ) {
                 Text(text = label, color = Color.White, fontSize = 14.sp)
+            }
+        }
+        state.adCutNotice?.let { notice ->
+            Box(
+                modifier = Modifier
+                    .padding(start = 16.dp)
+                    .clip(RoundedCornerShape(6.dp))
+                    .background(Color(0xFF2E7D32))
+                    .padding(horizontal = 12.dp, vertical = 5.dp),
+            ) {
+                Text(text = notice, color = Color.White, fontSize = 14.sp)
             }
         }
         if (state.networkSpeedBps > 0) {
@@ -1803,6 +1827,7 @@ private fun PortraitPill(
  * TV 端仍使用 [PlaybackToolbar] 的 D-pad 焦点控制层，两者按设备形态互斥。
  */
 @Composable
+@OptIn(ExperimentalLayoutApi::class)
 private fun PhonePlayerControls(
     state: PlaybackState,
     request: PlaybackRequest?,
@@ -1816,6 +1841,9 @@ private fun PhonePlayerControls(
     onOpenEpisodes: () -> Unit,
     onPrevEpisode: () -> Unit,
     onNextEpisode: () -> Unit,
+    /** 全屏旋转状态：true = 已锁竖屏（短剧满屏） */
+    portraitLocked: Boolean,
+    onRotate: () -> Unit,
     onFloat: () -> Unit,
     onStop: () -> Unit,
 ) {
@@ -1876,6 +1904,31 @@ private fun PhonePlayerControls(
                     modifier = Modifier
                         .clip(RoundedCornerShape(6.dp))
                         .background(Color.White.copy(alpha = 0.16f))
+                        .padding(horizontal = 8.dp, vertical = 3.dp),
+                )
+            }
+            // 原始分辨率徽标：竖屏短剧等显示实际宽高（如 720×1280），配合旋转满屏
+            if (state.videoWidth > 0 && state.videoHeight > 0) {
+                Text(
+                    text = "${state.videoWidth}×${state.videoHeight}",
+                    color = Color.White,
+                    fontSize = 11.sp,
+                    modifier = Modifier
+                        .padding(start = 6.dp)
+                        .clip(RoundedCornerShape(6.dp))
+                        .background(Color.White.copy(alpha = 0.16f))
+                        .padding(horizontal = 8.dp, vertical = 3.dp),
+                )
+            }
+            state.adCutNotice?.let { notice ->
+                Text(
+                    text = notice,
+                    color = Color.White,
+                    fontSize = 11.sp,
+                    modifier = Modifier
+                        .padding(start = 6.dp)
+                        .clip(RoundedCornerShape(6.dp))
+                        .background(Color(0xFF2E7D32))
                         .padding(horizontal = 8.dp, vertical = 3.dp),
                 )
             }
@@ -2035,11 +2088,13 @@ private fun PhonePlayerControls(
                 }
             }
 
-            Row(
+            // 功能行：竖屏满屏（旋转后）宽度不足时自动换行，保证全部按钮可达
+            FlowRow(
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(top = 6.dp),
                 horizontalArrangement = Arrangement.SpaceEvenly,
+                verticalArrangement = Arrangement.spacedBy(4.dp),
             ) {
                 if ((request?.episodes?.size ?: 0) > 1) {
                     val epCount = request?.episodes?.size ?: 0
@@ -2077,6 +2132,12 @@ private fun PhonePlayerControls(
                     icon = Icons.Filled.AspectRatio,
                     label = "比例",
                     onClick = { onMenu(PlaybackMenu.ASPECT) },
+                )
+                // 旋转屏幕：竖屏短剧全屏横放画面太小，一键转竖屏满屏；再点转回横屏
+                PhoneControlAction(
+                    icon = Icons.Filled.ScreenRotation,
+                    label = if (portraitLocked) "转横屏" else "转竖屏",
+                    onClick = onRotate,
                 )
                 if (!request?.backupUrls.isNullOrEmpty()) {
                     PhoneControlAction(

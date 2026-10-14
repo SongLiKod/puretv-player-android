@@ -18,10 +18,14 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flowOf
+import kotlinx.coroutines.flow.launchIn
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import javax.inject.Inject
@@ -41,6 +45,14 @@ data class ChartLists(
 
 /** 高分口碑榜入榜评分下限 */
 private const val CHART_RATING_FLOOR = 6.0
+
+/** 分类行计算作用域：品类 + 当前线路 + 失效隐藏集合 + 广告过滤配置 */
+private data class CategoryScope(
+    val kind: String?,
+    val sourceId: String?,
+    val broken: Set<String>,
+    val spec: Pair<Boolean, List<String>>,
+)
 
 /**
  * 影视点播列表 VM（需求 5.4.1 全品类聚合 / 5.4.3 智能追更后台同步 / 6 流畅度）。
@@ -91,11 +103,41 @@ class VodViewModel @Inject constructor(
         .map { list -> list.associate { it.id to it.name } }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyMap())
 
-    /** 当前品类 + 所选线路下的分类（分类行与列表同源，切线路自动跟随） */
+    /**
+     * 分类行：与海报墙完全同管线（当前线路 + 失效隐藏 + 广告过滤；按品类聚合、不限分类），
+     * 每个分类点进去必有内容；切线路/改过滤动态跟随（用户反馈：点了分类却没有内容）。
+     */
     val categories: StateFlow<List<String>> =
-        combine(selectedKind, selectedSourceId) { kind, sourceId -> kind to sourceId }
-            .flatMapLatest { (kind, sourceId) -> vodRepository.observeCategories(kind, sourceId) }
+        combine(selectedKind, selectedSourceId, settingsRepository.brokenPlayUrls, adFilterSpec) {
+            kind, sourceId, broken, spec ->
+            CategoryScope(kind, sourceId, broken, spec)
+        }
+            .flatMapLatest { scope ->
+                vodRepository.observeItems(kind = scope.kind, category = null)
+                    .map { list ->
+                        list.asSequence()
+                            .filter { scope.sourceId == null || it.sourceId == scope.sourceId }
+                            .filter { it.playUrl == null || it.playUrl !in scope.broken }
+                            .filter {
+                                !scope.spec.first ||
+                                    !AdFilter.isAd(it.title, it.overview, scope.spec.second)
+                            }
+                            .mapNotNull { it.category?.trim()?.takeIf { value -> value.isNotEmpty() } }
+                            .distinct()
+                            .sorted()
+                            .toList()
+                    }
+            }
             .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+
+    /** 选中分类在当前线路/过滤下已不存在时自动取消，防止海报墙空白（换线路另有重置） */
+    init {
+        combine(categories, selectedCategory) { list, selected -> list to selected }
+            .distinctUntilChanged()
+            .filter { (list, selected) -> selected != null && list.isNotEmpty() && selected !in list }
+            .onEach { selectedCategory.value = null }
+            .launchIn(viewModelScope)
+    }
 
     /**
      * 海报墙数据（缓存 Flow，实时响应刷新/刮削回填；确定性播放失败过的影片自动隐藏）。

@@ -190,7 +190,7 @@ fun PlaybackSection(
                 }
                 SwitchRow(
                     title = "过滤视频广告",
-                    subtitle = "播放时自动剪掉片头广告分片（m3u8 资源，起播前约 1 秒检测）",
+                    subtitle = "播放时剪掉片头/中插广告分片（m3u8 资源，起播前约 2 秒检测）",
                     checked = current.adVideoFilterEnabled,
                     onCheckedChange = viewModel::setAdVideoFilterEnabled,
                 )

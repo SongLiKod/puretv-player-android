@@ -173,14 +173,17 @@ fun VodScreen(nav: NavHostController) {
                 .fillMaxSize()
                 .padding(horizontal = if (portrait) 16.dp else 40.dp),
         ) {
-            VodFilterRow(
-                selectedKind = selectedKind,
-                onKindSelect = viewModel::selectKind,
-                categories = categories,
-                selectedCategory = selectedCategory,
-                onCategorySelect = viewModel::selectCategory,
-                modifier = Modifier.padding(top = if (portrait) 10.dp else 14.dp),
-            )
+            // 榜单面板打开时隐藏分类行（分类对榜单无意义，用户反馈）
+            if (!chartActive) {
+                VodFilterRow(
+                    selectedKind = selectedKind,
+                    onKindSelect = viewModel::selectKind,
+                    categories = categories,
+                    selectedCategory = selectedCategory,
+                    onCategorySelect = viewModel::selectCategory,
+                    modifier = Modifier.padding(top = if (portrait) 10.dp else 14.dp),
+                )
+            }
             // 同步不再占用页面空间（追加需求：不显示加载站点的大块提示）；
             // 同步状态由标题旁的小圈表示，失败时仅一行小字提示。
             if (!isRefreshing && syncMessage != null && items.isNotEmpty()) {
