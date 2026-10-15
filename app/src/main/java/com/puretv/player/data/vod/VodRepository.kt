@@ -135,16 +135,6 @@ class VodRepository @Inject constructor(
         cmsTypeKinds.getOrPut(sourceId) { ConcurrentHashMap() }[typeId] = kind
     }
 
-    /** JSON 数字 id 归一化：6.0 → "6"、"6.0" → "6"；非数字 id 原样保留；空值丢弃 */
-    private fun typeIdToString(raw: Any?): String? = when (raw) {
-        null -> null
-        is Number -> raw.toInt().toString()
-        else -> raw.toString().trim().let { text ->
-            val head = text.substringBefore('.')
-            if (head.isNotEmpty() && head.all { it in '0'..'9' }) head else text.takeIf { it.isNotEmpty() }
-        }
-    }
-
     /**
      * 发起同步（非挂起，任意界面可调）：
      * - 相同目标（线路 + 品类）进行中 → 幂等跳过（首页与影视页双入口不重复拉取）；

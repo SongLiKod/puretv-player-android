@@ -134,31 +134,32 @@ class SettingsRepository @Inject constructor(
     }
 
     // —— 影视搜索历史（动态：用户真实搜过的关键词，最近在前）——
-    // 设备本地 UI 状态，不入备份快照；'\n' 分隔存储保证顺序，去重且最多保留 [SEARCH_HISTORY_LIMIT] 条
+    // 设备本地 UI 状态，不入备份快照；'\n' 分隔存储保证顺序。
+    // 增删截断规则见 [SearchHistoryCodec]（纯逻辑，单测覆盖）。
 
     val vodSearchHistory: Flow<List<String>> = dataStore.data.map { prefs ->
-        prefs[KEY_VOD_SEARCH_HISTORY]?.split('\n')?.filter { it.isNotBlank() }.orEmpty()
+        SearchHistoryCodec.decode(prefs[KEY_VOD_SEARCH_HISTORY])
     }
 
     /** 记入搜索历史：置顶去重（重复搜的词回到最前），超上限截断 */
     suspend fun addVodSearchHistory(query: String) {
-        val word = query.trim()
-        if (word.isEmpty()) return
+        if (query.trim().isEmpty()) return
         edit { prefs ->
-            val current = prefs[KEY_VOD_SEARCH_HISTORY]
-                ?.split('\n')?.filter { it.isNotBlank() }.orEmpty()
-            val next = (listOf(word) + current.filter { it != word }).take(SEARCH_HISTORY_LIMIT)
-            prefs[KEY_VOD_SEARCH_HISTORY] = next.joinToString("\n")
+            val current = SearchHistoryCodec.decode(prefs[KEY_VOD_SEARCH_HISTORY])
+            prefs[KEY_VOD_SEARCH_HISTORY] = SearchHistoryCodec.encode(
+                SearchHistoryCodec.add(current, query),
+            )
         }
     }
 
     /** 删除单条搜索历史 */
     suspend fun removeVodSearchHistory(query: String) = edit { prefs ->
-        val current = prefs[KEY_VOD_SEARCH_HISTORY]
-            ?.split('\n')?.filter { it.isNotBlank() }.orEmpty()
-        val next = current.filterNot { it == query }
+        val next = SearchHistoryCodec.remove(
+            SearchHistoryCodec.decode(prefs[KEY_VOD_SEARCH_HISTORY]),
+            query,
+        )
         if (next.isEmpty()) prefs.remove(KEY_VOD_SEARCH_HISTORY)
-        else prefs[KEY_VOD_SEARCH_HISTORY] = next.joinToString("\n")
+        else prefs[KEY_VOD_SEARCH_HISTORY] = SearchHistoryCodec.encode(next)
     }
 
     /** 清空全部搜索历史 */
@@ -429,9 +430,6 @@ class SettingsRepository @Inject constructor(
         private val KEY_SELECTED_VOD_SOURCE = stringPreferencesKey("selected_vod_source_id")
         private val KEY_SELECTED_LIVE_SOURCE = stringPreferencesKey("selected_live_source_id")
         private val KEY_VOD_SEARCH_HISTORY = stringPreferencesKey("vod_search_history")
-
-        /** 搜索历史保留条数上限 */
-        private const val SEARCH_HISTORY_LIMIT = 20
         private val KEY_STARTUP = longPreferencesKey("last_startup_at")
     }
 }

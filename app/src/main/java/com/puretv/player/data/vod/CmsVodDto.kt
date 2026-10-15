@@ -31,12 +31,28 @@ data class CmsVodListDto(
  * （每条线路只加载 20 部）。这里兼容三种形态：
  * Double/Float 整值（7919.0 → 7919）、其他 Number、以及 "7919" / "7919.0" 字符串。
  */
-private fun Any?.toIntOrDefault(default: Int): Int = when (this) {
+internal fun Any?.toIntOrDefault(default: Int): Int = when (this) {
     null -> default
     is Double -> if (isFinite() && this == floor(this)) toInt() else default
     is Float -> if (isFinite() && this == floor(this)) toInt() else default
     is Number -> toInt()
     else -> toString().trim().substringBefore('.').toIntOrNull() ?: default
+}
+
+/**
+ * JSON 数字 id 归一化（type_id / 分类 id 学习专用）：6.0 → "6"、"6.0" → "6"；
+ * 非数字 id（如 "abc"）原样保留；null/空白 → null（丢弃）。
+ *
+ * Moshi 把 JSON 数字统一解析成 Double（`6` → `6.0`），直接 toString 会向服务器发
+ * `t=6.0`，部分站点不认（分类 id 学错 → 该标签过滤拉不到内容，用户反馈的动漫/综艺不加载）。
+ */
+internal fun typeIdToString(raw: Any?): String? = when (raw) {
+    null -> null
+    is Number -> raw.toInt().toString()
+    else -> raw.toString().trim().let { text ->
+        val head = text.substringBefore('.')
+        if (head.isNotEmpty() && head.all { it in '0'..'9' }) head else text.takeIf { it.isNotEmpty() }
+    }
 }
 
 @JsonClass(generateAdapter = true)
