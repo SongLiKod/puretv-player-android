@@ -415,6 +415,17 @@ fun PlaybackScreen(nav: NavHostController) {
         delay(if (state.isBuffering) 1200L else 250L)
         seamlessSwitch = false
     }
+    // 缓冲提示去抖：短于 800ms 的瞬时缓冲（本地缓存读取抖动/解码器初始化）不弹
+    // 「缓冲中…」——已缓冲内容播放中不被闪现提示打扰；持续缓冲照常显示
+    var bufferingDebounced by remember { mutableStateOf(false) }
+    LaunchedEffect(state.isBuffering) {
+        if (state.isBuffering) {
+            delay(800L)
+            bufferingDebounced = true
+        } else {
+            bufferingDebounced = false
+        }
+    }
 
     /** 上一集/下一集（与选集抽屉同一条换集路径：保留断点、重置备用源） */
     fun stepEpisode(delta: Int) {
@@ -797,7 +808,7 @@ fun PlaybackScreen(nav: NavHostController) {
             }
         }
 
-        if (state.isBuffering && errorMessage == null && !seamlessSwitch) {
+        if (bufferingDebounced && state.isBuffering && errorMessage == null && !seamlessSwitch) {
             BufferingOverlay()
         }
 

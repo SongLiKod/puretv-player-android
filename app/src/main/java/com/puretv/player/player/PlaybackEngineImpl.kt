@@ -17,9 +17,11 @@ import androidx.media3.common.VideoSize
 import androidx.media3.database.StandaloneDatabaseProvider
 import androidx.media3.datasource.DataSpec
 import androidx.media3.datasource.DefaultDataSource
+import androidx.media3.datasource.cache.Cache
 import androidx.media3.datasource.cache.CacheDataSource
+import androidx.media3.datasource.cache.CacheEvictor
 import androidx.media3.datasource.cache.CacheKeyFactory
-import androidx.media3.datasource.cache.LeastRecentlyUsedCacheEvictor
+import androidx.media3.datasource.cache.CacheSpan
 import androidx.media3.datasource.cache.SimpleCache
 import androidx.media3.datasource.okhttp.OkHttpDataSource
 import androidx.media3.exoplayer.DefaultLoadControl
@@ -39,6 +41,7 @@ import com.puretv.player.data.repository.HistoryRepository
 import com.puretv.player.di.IoDispatcher
 import dagger.hilt.android.qualifiers.ApplicationContext
 import java.io.File
+import java.util.TreeSet
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
@@ -99,11 +102,23 @@ class PlaybackEngineImpl @Inject constructor(
     /** 统一网络数据源：默认携带当前播放任务的自定义请求头（UA/Referer 等） */
     private val okHttpDataSourceFactory = OkHttpDataSource.Factory(okHttpClient)
 
+    /**
+     * 播放保护型 LRU 淘汰器（实现见文件尾 [PlaybackProtectiveEvictor]）：
+     * 正在播放集的分片永不被淘汰——否则缓存写满时，后台预缓冲下一集的并发写入会把
+     * 本集尚未播到的分片挤出缓存，播放中途读取回源网络弹「缓冲中…」
+     * （用户反馈：已缓冲的一集，播放中时不时弹缓冲）。
+     */
+    private lateinit var mediaEvictor: PlaybackProtectiveEvictor
+
     /** 共享播放磁盘缓存：上限可在设置调整（默认 4GB），超过自动淘汰最久未用分片 */
     private val mediaCache: SimpleCache by lazy {
+        mediaEvictor = PlaybackProtectiveEvictor(cacheMaxBytes()).apply {
+            // 与播放键登记共用同一同步集：playerCacheFactory 边播边登记，本集分片自动纳入保护
+            protectedKeys = playbackCacheKeys
+        }
         SimpleCache(
             File(context.cacheDir, "puretv_media"),
-            LeastRecentlyUsedCacheEvictor(cacheMaxBytes()),
+            mediaEvictor,
             StandaloneDatabaseProvider(context),
         )
     }
@@ -312,6 +327,11 @@ class PlaybackEngineImpl @Inject constructor(
         }
 
         _currentRequest.value = request
+        // 保护当前集缓存：本集预写入的键纳入保护集，后台预缓冲下一集的并发写入
+        // 不得把本集分片 LRU 淘汰（否则播放中途回源网络弹「缓冲中…」）
+        preloadCacheKeys[request.url]?.let { preloaded ->
+            synchronized(cacheKeyLock) { playbackCacheKeys.addAll(preloaded) }
+        }
         backupIndex = 0
         attemptedSources.clear()
         attemptedSources.add(0)
@@ -446,6 +466,8 @@ class PlaybackEngineImpl @Inject constructor(
         preloadJob?.cancel()
         preloadJob = null
         destroyPlayer()
+        // 退出播放：解除当前集缓存保护，之后由 LRU 按需正常淘汰，不留驻占用缓存额度
+        playbackCacheKeys.clear()
         // 保留 currentRequest 与进度：应用回到前台时播放页可按原进度续播
         _state.value = _state.value.copy(isPlaying = false, isBuffering = false)
     }
@@ -1123,6 +1145,12 @@ class PlaybackEngineImpl @Inject constructor(
             }
             upcoming.take(ahead).forEach { episode ->
                 if (!isActive) return@launch
+                // 缓存接近写满（≥90% 上限）：停止预缓冲新集——继续写入只会把「已缓冲」
+                // 旧集的分片 LRU 淘汰掉，徽标显示已缓冲但实际已失效（播放时又要走网络）
+                if (cacheSizeBytes() >= cacheMaxBytes() * 9 / 10) {
+                    _preloadProgress.value = _preloadProgress.value - episode.url
+                    return@launch
+                }
                 preloadEpisode(episode.url, request.headers)
             }
         }
@@ -1335,5 +1363,83 @@ class PlaybackEngineImpl @Inject constructor(
                     min = 15_000, max = 50_000, playback = 2_500, after = 5_000,
                 )
             }
+    }
+}
+
+/**
+ * 播放保护型 LRU 淘汰器：与 media3 官方 [LeastRecentlyUsedCacheEvictor] 等价的分片级 LRU
+ * （官方类为 final 不可扩展），附加 [protectedKeys] 键集保护——淘汰时跳过其中的键。
+ *
+ * 保护对象是"正在播放的集"的全部缓存键（含预写入分片）：缓存写满时若把本集尚未播到的
+ * 分片淘汰掉，播放中途读取会回源网络，弹「缓冲中…」（用户反馈：已缓冲的一集播放中时不时缓冲）。
+ * 保护集内的分片全部不可淘汰时允许缓存临时超限（换集/退出播放即解除保护，回落到上限内）。
+ *
+ * 调用时序与官方实现一致：全部回调由 [SimpleCache] 持锁触发，无并发写；
+ * [protectedKeys] 是与引擎共享的同步集（Collections.synchronizedSet），contains 自带锁。
+ */
+internal class PlaybackProtectiveEvictor(private val maxBytes: Long) : CacheEvictor {
+
+    /**
+     * 待淘汰分片：升序 = 最久未用优先。必须自定义比较器（与官方一致：最近访问时间升序、
+     * 平手再用 [CacheSpan.compareTo] 破平）——注意 [CacheSpan.compareTo] 只比较 键→位置
+     * 不含时间戳，用自然序会退化成按键字母序淘汰（既不是 LRU，也会造成账本与缓存不一致死循环）。
+     */
+    private val leastRecentlyUsed = TreeSet<CacheSpan> { lhs, rhs ->
+        val delta = lhs.lastTouchTimestamp - rhs.lastTouchTimestamp
+        when {
+            delta == 0L -> lhs.compareTo(rhs) // 平手：与官方一致用键→位置破平
+            lhs.lastTouchTimestamp < rhs.lastTouchTimestamp -> -1
+            else -> 1
+        }
+    }
+
+    /** 缓存内分片总字节（随 onSpanAdded/Removed 增减） */
+    private var currentSize = 0L
+
+    /** 当前播放集键集（与引擎播放键登记共享；淘汰时跳过其中的键） */
+    @Volatile
+    var protectedKeys: Set<String> = emptySet()
+
+    override fun requiresCacheSpanTouches(): Boolean = true
+
+    override fun onCacheInitialized() = Unit
+
+    override fun onSpanAdded(cache: Cache, span: CacheSpan) {
+        leastRecentlyUsed.add(span)
+        currentSize += span.length
+        evict(cache, 0L)
+    }
+
+    override fun onSpanRemoved(cache: Cache, span: CacheSpan) {
+        leastRecentlyUsed.remove(span)
+        currentSize -= span.length
+    }
+
+    override fun onSpanTouched(cache: Cache, oldSpan: CacheSpan, newSpan: CacheSpan) {
+        // 读取刷新访问时间 = 旧出新进（与官方 onSpanRemoved+onSpanAdded 等价）：
+        // 新时间戳插到队尾，该分片更晚被淘汰
+        onSpanRemoved(cache, oldSpan)
+        onSpanAdded(cache, newSpan)
+    }
+
+    override fun onStartFile(cache: Cache, key: String, position: Long, maxLength: Long) {
+        if (maxLength != C.LENGTH_UNSET.toLong()) {
+            // 为即将写入的分片预留空间（与官方一致按 maxLength 全量预留）
+            evict(cache, maxLength)
+        }
+    }
+
+    /** 超出上限时从最久未用开始淘汰、跳过保护键；候选全是保护键时允许临时超限 */
+    private fun evict(cache: Cache, requiredSpace: Long) {
+        while (currentSize + requiredSpace > maxBytes) {
+            val victim = leastRecentlyUsed.firstOrNull { it.key !in protectedKeys } ?: break
+            // removeSpan → onSpanRemoved 回收账本（集合摘除 + 字节数回退）
+            cache.removeSpan(victim)
+            // 防御：万一该分片已不在缓存内而未收到回调（理论不会发生），手动摘除
+            // 保证每轮循环集合必缩减——绝不允许账本不前进导致加载线程死循环
+            if (leastRecentlyUsed.remove(victim)) {
+                currentSize -= victim.length
+            }
+        }
     }
 }
