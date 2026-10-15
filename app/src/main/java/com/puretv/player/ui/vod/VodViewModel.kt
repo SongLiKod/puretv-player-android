@@ -80,8 +80,9 @@ class VodViewModel @Inject constructor(
     /** 搜索范围：true = 全网（跨全部线路），false = 本站（首页选中的资源站） */
     val searchScopeAll = MutableStateFlow(true)
 
-    /** 常用搜索词（内置热门关键词，追加需求：搜索框下常用搜索提示，点按即搜） */
-    val hotKeywords: List<String> = HOT_KEYWORDS
+    /** 搜索历史（动态：用户真实搜过的关键词，最近在前；可单条删除/一键清空，持久化到 DataStore） */
+    val searchHistory: StateFlow<List<String>> = settingsRepository.vodSearchHistory
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
 
     /** 与首页「资源站」共用的当前选中资源站 */
     val selectedSourceId: StateFlow<String?> = selectedSourceStore.selectedSourceId
@@ -305,42 +306,57 @@ class VodViewModel @Inject constructor(
 
     init {
         viewModelScope.launch {
-            // 一次性品类纠正：把误分进电影等品类的动漫内容归回动漫（打开影视页时静默执行）
+            // 首次进影视页的整条初始化链路兜底：任一环节（品类纠正/恢复选择/自动同步）
+            // 抛出未捕获异常只静默降级，绝不允许杀死应用（用户反馈：首次进影视页闪退）
             try {
-                vodRepository.reclassifyKindsIfNeeded()
-            } catch (e: CancellationException) {
-                throw e
-            } catch (t: Throwable) {
-                // 纠正失败不影响列表功能
-            }
-            // 「本站搜索」默认资源站：未选中时兜底为第一个可用点播源（CMS/Xtream）。
-            // 先等 DataStore 恢复落地再判断——直接读 .value 会被默认源抢占写回，覆盖保存的选择
-            if (selectedSourceStore.awaitSelection() == null) {
-                val first = vodRepository.vodSources.first()
-                    .filter {
-                        it.type == com.puretv.player.data.model.SourceType.CMS ||
-                            it.type == com.puretv.player.data.model.SourceType.XTREAM
+                // 一次性品类纠正：把误分进电影等品类的动漫内容归回动漫（打开影视页时静默执行）
+                try {
+                    vodRepository.reclassifyKindsIfNeeded()
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (t: Throwable) {
+                    // 纠正失败不影响列表功能
+                }
+                // 「本站搜索」默认资源站：未选中时兜底为第一个可用点播源（CMS/Xtream）。
+                // 先等 DataStore 恢复落地再判断——直接读 .value 会被默认源抢占写回，覆盖保存的选择
+                if (selectedSourceStore.awaitSelection() == null) {
+                    val first = vodRepository.vodSources.first()
+                        .filter {
+                            it.type == com.puretv.player.data.model.SourceType.CMS ||
+                                it.type == com.puretv.player.data.model.SourceType.XTREAM
+                        }
+                        .firstOrNull()
+                    if (first != null) selectedSourceStore.select(first.id)
+                }
+                // 打开页面自动同步（智能追更）：只定向刷新首页所选线路的全部影视，缓存新鲜时跳过
+                val hasSourcesNow = try {
+                    vodRepository.hasVodSources()
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (t: Throwable) {
+                    false
+                }
+                if (!hasSourcesNow) return@launch
+                val stale = System.currentTimeMillis() - vodRepository.lastRefreshAt > AUTO_SYNC_INTERVAL_MS
+                if (stale) refresh()
+                // 首页切换资源线路：影视页清空筛选/搜索，并只对新线路定向同步（清空重新刷新）。
+                // 单条联动失败静默：不让异常终止 collect，后续线路切换仍能响应
+                var lastSourceId = selectedSourceStore.selectedSourceId.value
+                selectedSourceStore.selectedSourceId.collect { sourceId ->
+                    if (sourceId == lastSourceId) return@collect
+                    lastSourceId = sourceId
+                    try {
+                        onSourceSwitched(sourceId)
+                    } catch (e: CancellationException) {
+                        throw e
+                    } catch (t: Throwable) {
+                        // 切线路联动失败静默：列表按缓存展示
                     }
-                    .firstOrNull()
-                if (first != null) selectedSourceStore.select(first.id)
-            }
-            // 打开页面自动同步（智能追更）：只定向刷新首页所选线路的全部影视，缓存新鲜时跳过
-            val hasSourcesNow = try {
-                vodRepository.hasVodSources()
+                }
             } catch (e: CancellationException) {
                 throw e
             } catch (t: Throwable) {
-                false
-            }
-            if (!hasSourcesNow) return@launch
-            val stale = System.currentTimeMillis() - vodRepository.lastRefreshAt > AUTO_SYNC_INTERVAL_MS
-            if (stale) refresh()
-            // 首页切换资源线路：影视页清空筛选/搜索，并只对新线路定向同步（清空重新刷新）
-            var lastSourceId = selectedSourceStore.selectedSourceId.value
-            selectedSourceStore.selectedSourceId.collect { sourceId ->
-                if (sourceId == lastSourceId) return@collect
-                lastSourceId = sourceId
-                onSourceSwitched(sourceId)
+                // 初始化失败静默：列表按缓存展示，滚动加载/手动刷新仍可重试
             }
         }
     }
@@ -375,6 +391,8 @@ class VodViewModel @Inject constructor(
             return
         }
         _onlineSearching.value = true
+        // 记入搜索历史（置顶去重，供搜索弹窗展示与一键复搜）
+        viewModelScope.launch { runCatching { settingsRepository.addVodSearchHistory(trimmed) } }
         val scopeSourceId = if (searchScopeAll.value) null else selectedSourceStore.selectedSourceId.value
         onlineSearchJob = viewModelScope.launch {
             try {
@@ -393,6 +411,15 @@ class VodViewModel @Inject constructor(
         searchQuery.value = null
         onlineSearchJob?.cancel()
         _onlineSearching.value = false
+    }
+
+    /** 删除单条搜索历史 / 清空全部历史（搜索弹窗内操作） */
+    fun removeSearchHistory(word: String) {
+        viewModelScope.launch { runCatching { settingsRepository.removeVodSearchHistory(word) } }
+    }
+
+    fun clearSearchHistory() {
+        viewModelScope.launch { runCatching { settingsRepository.clearVodSearchHistory() } }
     }
 
     /**
@@ -430,27 +457,5 @@ class VodViewModel @Inject constructor(
 
         /** 滚动到底每次追加的条数（动态加载，直到该线路全部加载完） */
         private const val VOD_LOAD_MORE = 50
-
-        /**
-         * 常用搜索词（内置热门关键词，均为各资源站高命中题材，点按即搜）。
-         * 追加需求：搜索框下提供常用搜索提示，选一个即可直接搜到本系统可用资源。
-         */
-        private val HOT_KEYWORDS = listOf(
-            "仙逆",
-            "凡人修仙传",
-            "斗破苍穹",
-            "斗罗大陆",
-            "完美世界",
-            "遮天",
-            "庆余年",
-            "狐妖小红娘",
-            "海贼王",
-            "名侦探柯南",
-            "流浪地球",
-            "长安三万里",
-            "熊出没",
-            "喜羊羊",
-            "西游记",
-        )
     }
 }

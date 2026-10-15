@@ -1,5 +1,6 @@
 package com.puretv.player.ui.vod
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -92,6 +93,7 @@ fun VodScreen(nav: NavHostController) {
     val searchQuery by viewModel.searchQuery.collectAsStateWithLifecycle()
     val searchResults by viewModel.searchResults.collectAsStateWithLifecycle()
     val searchScopeAll by viewModel.searchScopeAll.collectAsStateWithLifecycle()
+    val searchHistory by viewModel.searchHistory.collectAsStateWithLifecycle()
     val onlineSearching by viewModel.onlineSearching.collectAsStateWithLifecycle()
     val sourceNames by viewModel.sourceNames.collectAsStateWithLifecycle()
     val refreshProgress by viewModel.refreshProgress.collectAsStateWithLifecycle()
@@ -109,6 +111,11 @@ fun VodScreen(nav: NavHostController) {
     val syncMessage = refreshProgress?.takeIf { it.stage == ImportProgress.Stage.FAILED }?.message
     val searchActive = !searchQuery.isNullOrBlank()
     val chartActive = showCharts && !searchActive
+
+    // 遥控器返回键逐层退出：先关搜索弹窗，再退出搜索结果回海报墙
+    //（搜索结果页已按需求移除「清除搜索」按钮，返回键成为主退出路径）
+    BackHandler(enabled = showSearchDialog) { showSearchDialog = false }
+    BackHandler(enabled = !showSearchDialog && searchActive) { viewModel.clearSearch() }
 
     val portrait = isPortrait()
 
@@ -212,8 +219,9 @@ fun VodScreen(nav: NavHostController) {
                 .fillMaxSize()
                 .padding(horizontal = if (portrait) 16.dp else 40.dp),
         ) {
-            // 榜单面板打开时隐藏分类行（分类对榜单无意义，用户反馈）
-            if (!chartActive) {
+            // 榜单面板打开时隐藏分类行（分类对榜单无意义，用户反馈）；
+            // 搜索结果界面同样隐藏顶部分类（用户反馈：搜索时顶部分类无意义）
+            if (!chartActive && !searchActive) {
                 VodFilterRow(
                     selectedKind = selectedKind,
                     onKindSelect = viewModel::selectKind,
@@ -264,7 +272,6 @@ fun VodScreen(nav: NavHostController) {
                         onlineSearching = onlineSearching,
                         scopeAll = searchScopeAll,
                         onScopeChange = viewModel::setSearchScope,
-                        onClear = viewModel::clearSearch,
                         onOpen = { openDetail(nav, it) },
                         sourceNames = sourceNames,
                     )
@@ -331,11 +338,13 @@ fun VodScreen(nav: NavHostController) {
 
     if (showSearchDialog) {
         SearchDialog(
-            hotKeywords = viewModel.hotKeywords,
+            history = searchHistory,
             onSearch = { query ->
                 showSearchDialog = false
                 if (query.isNotBlank()) viewModel.submitSearch(query)
             },
+            onRemoveHistory = viewModel::removeSearchHistory,
+            onClearHistory = viewModel::clearSearchHistory,
             onDismiss = { showSearchDialog = false },
         )
     }
@@ -493,7 +502,6 @@ private fun SearchResults(
     onlineSearching: Boolean,
     scopeAll: Boolean,
     onScopeChange: (Boolean) -> Unit,
-    onClear: () -> Unit,
     onOpen: (VodItemEntity) -> Unit,
     sourceNames: Map<String, String> = emptyMap(),
 ) {
@@ -521,12 +529,7 @@ private fun SearchResults(
                         modifier = Modifier.padding(start = 16.dp),
                     )
                 }
-                androidx.compose.foundation.layout.Spacer(
-                    modifier = Modifier
-                        .weight(1f)
-                        .height(1.dp),
-                )
-                TvTextButton(text = "清除搜索", onClick = onClear)
+                // 「清除搜索」按钮按用户要求移除：退出搜索走遥控器返回键（BackHandler）
             }
             // 搜索范围：本站（首页选中的资源站）/ 全网（跨全部线路在线检索）
             Row(
@@ -596,11 +599,13 @@ private fun ScopeChip(text: String, selected: Boolean, onClick: () -> Unit) {
     )
 }
 
-/** 搜索弹窗：关键词输入 + 常用搜索词（内置热门关键词，点按即搜，追加需求） */
+/** 搜索弹窗：关键词输入 + 搜索历史（动态记录，最近在前；主体点按即搜、尾部 ✕ 单条删除、右上清空） */
 @Composable
 private fun SearchDialog(
-    hotKeywords: List<String>,
+    history: List<String>,
     onSearch: (String) -> Unit,
+    onRemoveHistory: (String) -> Unit,
+    onClearHistory: () -> Unit,
     onDismiss: () -> Unit,
 ) {
     val colors = PureTvTheme.colors
@@ -638,19 +643,54 @@ private fun SearchDialog(
                 }
             },
         )
-        Text(
-            text = "常用搜索",
-            color = colors.textTertiary,
-            fontSize = 13.sp,
-            modifier = Modifier.padding(top = 14.dp, bottom = 8.dp),
-        )
-        hotKeywords.chunked(3).forEach { rowWords ->
-            Row(
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                modifier = Modifier.padding(bottom = 8.dp),
-            ) {
-                rowWords.forEach { word ->
-                    HotKeywordChip(word = word) { onSearch(word) }
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(top = 14.dp, bottom = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                text = "搜索历史",
+                color = colors.textTertiary,
+                fontSize = 13.sp,
+            )
+            androidx.compose.foundation.layout.Spacer(
+                modifier = Modifier
+                    .weight(1f)
+                    .height(1.dp),
+            )
+            if (history.isNotEmpty()) {
+                Text(
+                    text = "清空",
+                    color = colors.textHint,
+                    fontSize = 13.sp,
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(12.dp))
+                        .clickable(onClick = onClearHistory)
+                        .padding(horizontal = 10.dp, vertical = 4.dp),
+                )
+            }
+        }
+        if (history.isEmpty()) {
+            Text(
+                text = "暂无搜索记录，搜过的关键词会出现在这里",
+                color = colors.textHint,
+                fontSize = 13.sp,
+                modifier = Modifier.padding(bottom = 4.dp),
+            )
+        } else {
+            history.chunked(3).forEach { rowWords ->
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    modifier = Modifier.padding(bottom = 8.dp),
+                ) {
+                    rowWords.forEach { word ->
+                        HistoryChip(
+                            word = word,
+                            onClick = { onSearch(word) },
+                            onDelete = { onRemoveHistory(word) },
+                        )
+                    }
                 }
             }
         }
@@ -666,21 +706,34 @@ private fun SearchDialog(
     }
 }
 
-/** 常用搜索词胶囊（点按即搜） */
+/** 搜索历史胶囊：主体点按即搜，尾部 ✕ 单条删除 */
 @Composable
-private fun HotKeywordChip(word: String, onClick: () -> Unit) {
+private fun HistoryChip(word: String, onClick: () -> Unit, onDelete: () -> Unit) {
     val colors = PureTvTheme.colors
-    Text(
-        text = word,
-        color = colors.textSecondary,
-        fontSize = 14.sp,
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
         modifier = Modifier
             .clip(RoundedCornerShape(15.dp))
             .background(colors.card)
-            .border(1.dp, colors.divider, RoundedCornerShape(15.dp))
-            .clickable(onClick = onClick)
-            .padding(horizontal = 12.dp, vertical = 6.dp),
-    )
+            .border(1.dp, colors.divider, RoundedCornerShape(15.dp)),
+    ) {
+        Text(
+            text = word,
+            color = colors.textSecondary,
+            fontSize = 14.sp,
+            modifier = Modifier
+                .clickable(onClick = onClick)
+                .padding(start = 12.dp, top = 6.dp, bottom = 6.dp),
+        )
+        Text(
+            text = "✕",
+            color = colors.textHint,
+            fontSize = 11.sp,
+            modifier = Modifier
+                .clickable(onClick = onDelete)
+                .padding(horizontal = 10.dp, vertical = 7.dp),
+        )
+    }
 }
 
 /** 海报网格（key = sourceId|id 保证多源共存稳定；竖屏缩小最小列宽，保证手机 2 列） */
